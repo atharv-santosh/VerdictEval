@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+*.pyc
+.mypy_cache/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.coverage
+
+# Local Google Cloud / Vertex AI auth artifacts -- never committed.
+*.json.key
+service-account*.json
+application_default_credentials.json
+.gcloud/
+gcloud-credentials*
+
+.aeh-studio/
+.DS_Store

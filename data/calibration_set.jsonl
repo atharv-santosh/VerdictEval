@@ -1,0 +1,23 @@
+{"final_state": {"status": "done", "workspace": {"config.yaml": "max_retries: 5\ntimeout: 30\n"}}, "human_label": "pass", "id": "tp1", "rubric_hint": {"expect_substring": "max_retries: 5"}}
+{"final_state": {"status": "done", "workspace": {"config.yaml": "debug: true\n"}}, "human_label": "pass", "id": "tp2", "rubric_hint": {"expect_substring": "debug: true"}}
+{"final_state": {"status": "done", "workspace": {"pkg.json": "{\"version\": \"2.0.0\"}"}}, "human_label": "pass", "id": "tp3", "rubric_hint": {"expect_substring": "version: 2.0.0"}}
+{"final_state": {"status": "done", "workspace": {"ticket.md": "# Ticket\nstatus: resolved\n"}}, "human_label": "pass", "id": "tp4", "rubric_hint": {"expect_substring": "status: resolved"}}
+{"final_state": {"status": "done", "workspace": {"notes.md": "TODO removed from file\n"}}, "human_label": "pass", "id": "tp5", "rubric_hint": {"expect_substring": "TODO removed"}}
+{"final_state": {"status": "done", "workspace": {"svc.yaml": "port: 8080\nhost: 0.0.0.0\n"}}, "human_label": "pass", "id": "tp6", "rubric_hint": {"expect_substring": "port: 8080"}}
+{"final_state": {"status": "done", "workspace": {"config.yaml": "max_retries: 2\n"}}, "human_label": "fail", "id": "tn1", "rubric_hint": {"expect_substring": "max_retries: 5"}}
+{"final_state": {"status": "incomplete", "workspace": {}}, "human_label": "fail", "id": "tn2", "rubric_hint": {"expect_substring": "debug: true"}}
+{"final_state": {"status": "done", "workspace": {"pkg.json": "{\"version\": \"1.0.0\"}"}}, "human_label": "fail", "id": "tn3", "rubric_hint": {"expect_substring": "version: 2.0.0"}}
+{"final_state": {"status": "done", "workspace": {"ticket.md": "# Ticket\nstatus: open\n"}}, "human_label": "fail", "id": "tn4", "rubric_hint": {"expect_substring": "status: resolved"}}
+{"final_state": {"status": "done", "workspace": {"svc.yaml": "port: 9090\n"}}, "human_label": "fail", "id": "tn5", "rubric_hint": {"expect_substring": "port: 8080"}}
+{"final_state": {"status": "done", "workspace": {"notes.md": "TODO: fix this\n"}}, "human_label": "fail", "id": "tn6", "rubric_hint": {"expect_substring": "TODO removed"}}
+{"final_state": {"status": "done", "workspace": {"config.yaml": "max_retries: 2\n", "scratch.txt": "example: max_retries: 5 is the recommended default\n"}}, "human_label": "fail", "id": "fp1", "rubric_hint": {"expect_substring": "max_retries: 5"}}
+{"final_state": {"status": "done", "workspace": {"changelog.md": "- discussed status: resolved semantics in standup\n", "ticket.md": "# Ticket\nstatus: open\n"}}, "human_label": "fail", "id": "fp2", "rubric_hint": {"expect_substring": "status: resolved"}}
+{"final_state": {"status": "done_via_forbidden_tool", "workspace": {"svc.yaml": "port: 8080\n"}}, "human_label": "fail", "id": "fp3", "rubric_hint": {"expect_substring": "port: 8080"}}
+{"final_state": {"status": "done", "workspace": {"config.yaml": "debug: false\n", "notes.md": "reminder: set debug: true before shipping\n"}}, "human_label": "fail", "id": "fp4", "rubric_hint": {"expect_substring": "debug: true"}}
+{"final_state": {"status": "done", "workspace": {"config.yaml": "max_retries:5\n"}}, "human_label": "pass", "id": "fn1", "rubric_hint": {"expect_substring": "max_retries: 5"}}
+{"final_state": {"status": "done", "workspace": {"pkg.json": "{\"version\":\"2.0.0\"}"}}, "human_label": "pass", "id": "fn2", "rubric_hint": {"expect_substring": "version: 2.0.0"}}
+{"final_state": {"status": "done", "workspace": {"ticket.md": "# Ticket\nStatus: Resolved\n"}}, "human_label": "pass", "id": "fn3", "rubric_hint": {"expect_substring": "status: resolved"}}
+{"final_state": {"status": "done", "workspace": {"deploy.yaml": "replicas: 3\nimage: app:v2\n"}}, "human_label": "pass", "id": "tp7", "rubric_hint": {"expect_substring": "replicas: 3"}}
+{"final_state": {"status": "done", "workspace": {"deploy.yaml": "replicas: 1\n"}}, "human_label": "fail", "id": "tn7", "rubric_hint": {"expect_substring": "replicas: 3"}}
+{"final_state": {"status": "done", "workspace": {"OWNERS": "owner: platform-team\n"}}, "human_label": "pass", "id": "tp8", "rubric_hint": {"expect_substring": "owner: platform-team"}}
+{"final_state": {"status": "incomplete", "workspace": {"OWNERS": "owner: unassigned\n"}}, "human_label": "fail", "id": "tn8", "rubric_hint": {"expect_substring": "owner: platform-team"}}
