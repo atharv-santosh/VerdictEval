@@ -1,36 +1,36 @@
 :root {
-  --ground: #F1F4F3;
-  --panel: #FFFFFF;
-  --panel-2: #F7FAF9;
-  --ink: #0F1618;
-  --mid: #5B6A6C;
-  --line: #D6DEDC;
-  --line-2: #E7EDEB;
-  --accent: #0E6E78;
-  --accent-soft: #DCEEEF;
-  --critical: #A8322A;
-  --safe: #2C6A4E;
-  --warn: #8F5E10;
-  --radius: 6px;
-  --font-head: "Archivo", "Helvetica Neue", Arial, sans-serif;
-  --font-body: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
-  --font-mono: "IBM Plex Mono", "SF Mono", Consolas, monospace;
+  --ground: #ffffff;
+  --panel: #ffffff;
+  --panel-2: #fafbfb;
+  --ink: #16191c;
+  --mid: #6b7378;
+  --line: #e2e5e7;
+  --line-2: #eceff0;
+  --accent: #14676f;
+  --accent-soft: #eef3f3;
+  --critical: #a3322a;
+  --safe: #2b6446;
+  --warn: #7a5a12;
+  --radius: 2px;
+  --font-head: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-body: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --ground: #0C1214;
-    --panel: #141C1E;
-    --panel-2: #101819;
-    --ink: #DFE8E7;
-    --mid: #8A9A9B;
-    --line: #243033;
-    --line-2: #1B2527;
-    --accent: #4DB2BB;
-    --accent-soft: #132A2D;
-    --critical: #E0736A;
-    --safe: #63B48A;
-    --warn: #D2A04A;
+    --ground: #14171a;
+    --panel: #14171a;
+    --panel-2: #191d21;
+    --ink: #dfe3e6;
+    --mid: #8e979d;
+    --line: #272c30;
+    --line-2: #21262a;
+    --accent: #52aeb5;
+    --accent-soft: #1a2426;
+    --critical: #de7b71;
+    --safe: #66b48d;
+    --warn: #c39a4c;
   }
 }
 
@@ -41,7 +41,7 @@ html, body {
   background: var(--ground);
   color: var(--ink);
   font-family: var(--font-body);
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.45;
 }
 
@@ -82,7 +82,7 @@ button { font-family: var(--font-body); cursor: pointer; }
   background: var(--accent-soft);
   color: var(--accent);
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: 2px;
   font-size: 12px;
 }
 .brand-name { font-family: var(--font-head); font-weight: 700; font-size: 17px; }
@@ -197,7 +197,7 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
 .task-card .tid { font-family: var(--font-mono); font-weight: 600; }
 .task-card .tprompt { color: var(--mid); font-size: 12.5px; flex: 1; min-width: 180px; }
 .task-tags { display: flex; gap: 4px; }
-.tag { font-size: 10.5px; padding: 1px 6px; border-radius: 4px; background: var(--panel-2); color: var(--mid); border: 1px solid var(--line-2); }
+.tag { font-size: 10.5px; padding: 1px 6px; border-radius: 2px; background: var(--panel-2); color: var(--mid); border: 1px solid var(--line-2); }
 
 .repeat-row {
   display: grid;
@@ -228,7 +228,7 @@ table.grid tbody tr:hover { background: var(--panel-2); }
   justify-content: center;
   width: 26px;
   height: 26px;
-  border-radius: 4px;
+  border-radius: 2px;
   border: 1px solid var(--line);
   cursor: pointer;
   font-family: var(--font-mono);
@@ -299,8 +299,8 @@ table.grid tbody tr:hover { background: var(--panel-2); }
 /* ---------- gate ---------- */
 
 .margin-bar { display: flex; align-items: center; gap: 8px; }
-.margin-track { position: relative; height: 10px; background: var(--line-2); border-radius: 5px; flex: 1; min-width: 90px; }
-.margin-band { position: absolute; top: 0; bottom: 0; background: var(--accent-soft); border-radius: 5px; }
+.margin-track { position: relative; height: 10px; background: var(--line-2); border-radius: 2px; flex: 1; min-width: 90px; }
+.margin-band { position: absolute; top: 0; bottom: 0; background: var(--accent-soft); border-radius: 2px; }
 .margin-point { position: absolute; top: -3px; width: 2px; height: 16px; background: var(--ink); }
 
 .diff-row.regressed { background: color-mix(in srgb, var(--critical) 8%, transparent); }

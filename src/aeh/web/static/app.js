@@ -144,9 +144,9 @@ function buildTaskForm(task) {
   const errBox = el("ul", { class: "err-list", style: "display:none" });
 
   const idInput = el("input", { type: "text", value: task.id, placeholder: "task_id" });
-  const inputBox = el("textarea", { placeholder: "Natural-language instruction the agent receives" }, []);
+  const inputBox = el("textarea", { placeholder: "Prompt" }, []);
   inputBox.value = task.input;
-  const rubricBox = el("textarea", { placeholder: "Rubric text for the judge (free text)" }, []);
+  const rubricBox = el("textarea", { placeholder: "Rubric" }, []);
   rubricBox.value = task.rubric;
   const seedsInput = el("input", { type: "text", value: task.seeds.join(", "), placeholder: "1, 2, 3" });
   const tagsInput = el("input", { type: "text", value: task.tags.join(", "), placeholder: "flaky, regressed" });
@@ -162,7 +162,7 @@ function buildTaskForm(task) {
   panel.appendChild(el("div", { class: "col", style: "margin-top:8px" }, [el("label", {}, ["Rubric"]), rubricBox]));
 
   // -- workspace files --
-  panel.appendChild(el("div", { class: "fieldset-title" }, [el("h3", {}, ["Setup workspace files"])]));
+  panel.appendChild(el("div", { class: "fieldset-title" }, [el("h3", {}, ["Workspace"])]));
   const wsList = el("div", {});
   const workspace = task.setup.workspace || {};
   const wsRows = Object.entries(workspace).map(([p, c]) => ({ path: p, content: c }));
@@ -187,7 +187,7 @@ function buildTaskForm(task) {
   panel.appendChild(el("button", { class: "btn small", onclick: () => { wsRows.push({ path: "", content: "" }); renderWs(); } }, ["+ Add file"]));
 
   // -- plan --
-  panel.appendChild(el("div", { class: "fieldset-title" }, [el("h3", {}, ["Scripted plan (fake backend)"])]));
+  panel.appendChild(el("div", { class: "fieldset-title" }, [el("h3", {}, ["Plan (fake backend)"])]));
   const planList = el("div", {});
   const planRows = (task.plan || []).map((s) => JSON.parse(JSON.stringify(s)));
   function renderPlan() {
@@ -378,7 +378,7 @@ function renderRunView() {
     ]),
     el("div", { class: "row", style: "margin-top:8px" }, [
       el("div", { class: "col grow" }, [el("label", {}, ["Seed override"]), seedsOverride]),
-      el("label", { class: "row", style: "align-items:center;gap:6px;font-weight:400;color:var(--ink)" }, [judgeCheck, el("span", {}, ["Also score with judge (advisory)"])]),
+      el("label", { class: "row", style: "align-items:center;gap:6px;font-weight:400;color:var(--ink)" }, [judgeCheck, el("span", {}, ["Score with judge"])]),
     ]),
     estimateBox,
     el("div", { class: "row", style: "margin-top:10px" }, [
@@ -494,11 +494,11 @@ async function renderResultsView() {
   try {
     runsList = (await api("/api/runs")).runs;
   } catch (e) {
-    v.appendChild(el("p", { class: "muted" }, ["No runs yet. Start one from the Run tab."]));
+    v.appendChild(el("p", { class: "muted" }, ["No runs yet."]));
     return;
   }
   if (!runsList.length) {
-    v.appendChild(el("p", { class: "muted" }, ["No runs yet. Start one from the Run tab."]));
+    v.appendChild(el("p", { class: "muted" }, ["No runs yet."]));
     return;
   }
 
@@ -609,7 +609,7 @@ async function openTrajectoryDrawer(runId, taskId, seed) {
   try {
     data = await api(`/api/runs/${runId}/trajectory/${encodeURIComponent(taskId)}/${seed}`);
   } catch (e) {
-    toast("Couldn't load trajectory: " + e.message, true);
+    toast("Trajectory load failed: " + e.message, true);
     return;
   }
   const backdrop = ensureDrawer();
@@ -640,9 +640,9 @@ async function openTrajectoryDrawer(runId, taskId, seed) {
   }
 
   if (data.judge) {
-    drawer.appendChild(el("h3", {}, ["Judge verdict (advisory)"]));
+    drawer.appendChild(el("h3", {}, ["Judge"]));
     drawer.appendChild(el("p", { class: "small" }, [`label=${data.judge.label} -- ${data.judge.rationale}`]));
-    drawer.appendChild(el("p", { class: "muted small" }, ["Pass/fail above is determined by assertions, not the judge; the judge is shown here for triage."]));
+    drawer.appendChild(el("p", { class: "muted small" }, ["Pass/fail comes from assertions. The judge is advisory."]));
   }
 
   backdrop.classList.add("open");
@@ -654,7 +654,7 @@ async function renderCalibrationView() {
   const v = document.getElementById("view-calibration");
   v.innerHTML = "";
   v.appendChild(el("h1", {}, ["Judge calibration"]));
-  v.appendChild(el("p", { class: "muted small" }, ["Human-labelled calibration set vs. a judge backend. Relabel a row and re-run to see kappa move live."]));
+  v.appendChild(el("p", { class: "muted small" }, ["Relabel a row and re-run to see kappa change."]));
 
   const rows = (await api("/api/calibration")).rows;
   state.calibrationRows = rows;
@@ -763,7 +763,7 @@ async function renderCalibrationView() {
       resultSlot.appendChild(el("div", { class: "grid-wrap" }, [ctable]));
 
       resultSlot.appendChild(el("h3", {}, [`Disagreements (${result.disagreements.length})`]));
-      if (!result.disagreements.length) resultSlot.appendChild(el("p", { class: "muted small" }, ["None -- perfect agreement on this set."]));
+      if (!result.disagreements.length) resultSlot.appendChild(el("p", { class: "muted small" }, ["None."]));
       for (const d of result.disagreements) {
         resultSlot.appendChild(
           el("div", { class: "disagreement" }, [
@@ -789,7 +789,7 @@ async function renderGateView() {
   const baseline = await api("/api/baseline");
   const baselineBox = el("div", { class: "panel panel-2" });
   if (!baseline.exists) {
-    baselineBox.appendChild(el("p", { class: "muted" }, ["No baseline saved yet. Run a suite, then click 'Save as baseline' from the Results tab."]));
+    baselineBox.appendChild(el("p", { class: "muted" }, ["No baseline saved."]));
   } else {
     baselineBox.appendChild(el("h3", {}, ["Current baseline"]));
     baselineBox.appendChild(el("p", { class: "small" }, [`${baseline.suite_name} -- saved ${new Date(baseline.created_at * 1000).toLocaleString()} -- ${Object.keys(baseline.tasks).length} task(s)`]));
@@ -799,7 +799,7 @@ async function renderGateView() {
   let runsList = [];
   try { runsList = (await api("/api/runs")).runs; } catch (e) { /* none yet */ }
   if (!runsList.length) {
-    v.appendChild(el("p", { class: "muted" }, ["Run a suite from the Run tab, then compare it against the baseline here."]));
+    v.appendChild(el("p", { class: "muted" }, ["No run to compare."]));
     return;
   }
 
@@ -822,7 +822,7 @@ async function renderGateView() {
         el("p", {}, [el("span", { class: `pill verdict-pill ${result.gate_passed ? "stable-pass" : "stable-fail"}` }, [result.gate_passed ? "GATE PASSED" : "GATE FAILED"]), el("span", { class: "muted small", style: "margin-left:8px" }, [`tolerance z=${result.z}`])])
       );
       const table = el("table", { class: "grid" });
-      table.appendChild(el("thead", {}, [el("tr", {}, [el("th", {}, ["Task"]), el("th", {}, ["Baseline"]), el("th", {}, ["Current"]), el("th", {}, ["Margin (why this wide)"]), el("th", {}, ["Classification"])])]));
+      table.appendChild(el("thead", {}, [el("tr", {}, [el("th", {}, ["Task"]), el("th", {}, ["Baseline"]), el("th", {}, ["Current"]), el("th", {}, ["Margin"]), el("th", {}, ["Classification"])])]));
       const tbody = el("tbody", {});
       for (const d of result.diffs) {
         const base = d.baseline_pass_rate;
@@ -944,4 +944,4 @@ async function boot() {
   await renderCalibrationView();
 }
 
-boot().catch((e) => toast("Failed to load Eval Studio: " + e.message, true));
+boot().catch((e) => toast("Load failed: " + e.message, true));
