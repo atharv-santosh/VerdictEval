@@ -13,6 +13,7 @@ from typing import Any, Iterator
 
 import yaml
 from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -27,39 +28,74 @@ from aeh.calibrate import load_calibration_set
 from aeh.cassette import DivergenceError, OnDivergence
 from aeh.flakiness import SeedOutcome, TaskFlakinessReport, analyze
 from aeh.gate import diff_against_baseline
-from aeh.scoring.assertions import evaluate_assertions
-from aeh.scoring.judge import GeminiJudge, JudgeBackend, OfflineRubricJudge
+from aeh.metrics import cost_per_solved, estimate_cost, summarize
+from aeh.scoring.assertions import ASSERTION_TYPES, evaluate_assertions
+from aeh.scoring.judge import DEFAULT_PROMPT_VERSION, PROMPT_VERSIONS, GeminiJudge, JudgeBackend, OfflineRubricJudge
 from aeh.suite import Suite, Task, load_suite
 
 _WEB_DIR = Path(__file__).resolve().parent
 
-_ASSERTION_TYPES = ("file_contains", "file_equals", "tool_sequence", "forbidden_tool", "status_equals")
+_ASSERTION_TYPES = ASSERTION_TYPES
 _TOOL_NAMES = ("list_files", "read_file", "write_file", "search")
-
-_GEMINI_PRICE_PER_MTOK: dict[str, tuple[float, float]] = {
-    "gemini-2.5-flash-lite": (0.10, 0.40),
-    "gemini-2.5-flash": (0.30, 2.50),
-}
 
 _ESTIMATED_TOKENS_IN_PER_SEED = 900
 _ESTIMATED_TOKENS_OUT_PER_SEED = 120
 
-
-def _estimate_cost(model: str, tokens_in: int, tokens_out: int) -> float | None:
-    prices = _GEMINI_PRICE_PER_MTOK.get(model)
-    if prices is None:
-        return None
-    price_in, price_out = prices
-    return (tokens_in / 1_000_000) * price_in + (tokens_out / 1_000_000) * price_out
+_DEFAULT_MODEL = "gemini-2.5-flash-lite"
 
 
-def _token_totals(events: list[Any]) -> tuple[int, int]:
-    tokens_in = tokens_out = 0
-    for event in events:
-        if event.type == "llm_result":
-            tokens_in += int(event.payload["response"].get("tokens_in", 0))
-            tokens_out += int(event.payload["response"].get("tokens_out", 0))
-    return tokens_in, tokens_out
+class StrictModel(BaseModel):
+    """Base for every request body: an unknown field is a 422, never a silently ignored one.
+
+    Without this a request that means to run against a real model but misspells
+    ``backend`` quietly runs the fake backend instead and reports a pass rate for
+    something nobody asked for.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class TaskUpsertRequest(StrictModel):
+    task: dict[str, Any] = Field(default_factory=dict)
+    editing_id: str | None = None
+
+
+class EstimateRequest(StrictModel):
+    task_ids: list[str] | None = None
+    seeds: list[int] | None = None
+    model: str = _DEFAULT_MODEL
+
+
+class StartRunRequest(StrictModel):
+    task_ids: list[str] | None = None
+    seeds: list[int] | None = None
+    backend: str = "fake"
+    model: str = _DEFAULT_MODEL
+    temperature: float = 0.0
+    use_judge: bool = True
+
+
+class GateRequest(StrictModel):
+    run_id: str | None = None
+    z: float = 1.96
+
+
+class RelabelRequest(StrictModel):
+    id: str
+    label: str
+
+
+class CalibrationRunRequest(StrictModel):
+    backend: str = "fake"
+    model: str = _DEFAULT_MODEL
+    split: str = "all"
+    prompt_version: str = DEFAULT_PROMPT_VERSION
+
+
+class ReplayCassetteRequest(StrictModel):
+    backend: str | None = None
+    model: str = _DEFAULT_MODEL
+    on_divergence: str = "passthrough"
 
 
 def _event_to_dict(event: Any) -> dict[str, Any]:
@@ -209,7 +245,17 @@ class RunJob:
         for q in listeners:
             q.put(line)
 
+    @property
+    def priced(self) -> bool:
+        return self.backend_name != "fake"
+
+    def all_seed_rows(self) -> list[dict[str, Any]]:
+        return [row for seeds in self.tasks.values() for row in seeds.values()]
+
     def to_summary(self) -> dict[str, Any]:
+        rows = self.all_seed_rows()
+        cl = summarize(rows, self.model, priced=self.priced)
+        solved = sum(1 for row in rows if row["passed"])
         return {
             "id": self.id,
             "suite_name": self.suite_name,
@@ -223,9 +269,13 @@ class RunJob:
             "completed_seed_runs": self.completed_seed_runs,
             "tokens_in": self.tokens_in,
             "tokens_out": self.tokens_out,
-            "cost_estimate": _estimate_cost(self.model, self.tokens_in, self.tokens_out)
-            if self.backend_name != "fake"
+            "cost_estimate": estimate_cost(self.model, self.tokens_in, self.tokens_out)
+            if self.priced
             else 0.0,
+            "p50_s": cl.p50_s,
+            "p95_s": cl.p95_s,
+            "solved_seed_runs": solved,
+            "cost_per_solved_usd": cost_per_solved(cl.cost_usd, solved),
         }
 
     def flakiness_reports(self) -> list[TaskFlakinessReport]:
@@ -241,9 +291,11 @@ class RunJob:
         rows = []
         for task_id, seeds in self.tasks.items():
             report = reports.get(task_id)
+            cl = summarize(seeds.values(), self.model, priced=self.priced)
             rows.append(
                 {
                     "task_id": task_id,
+                    "cost_latency": cl.to_dict(),
                     "seeds": {str(seed): row for seed, row in sorted(seeds.items(), key=lambda kv: int(kv[0]))},
                     "n": report.n if report else 0,
                     "passes": report.passes if report else 0,
@@ -397,7 +449,7 @@ class WebState:
                             "total": job.total_seed_runs,
                             "tokens_in": job.tokens_in,
                             "tokens_out": job.tokens_out,
-                            "cost_estimate": _estimate_cost(job.model, job.tokens_in, job.tokens_out)
+                            "cost_estimate": estimate_cost(job.model, job.tokens_in, job.tokens_out)
                             if job.backend_name != "fake"
                             else 0.0,
                         }
@@ -432,12 +484,12 @@ class WebState:
                 "events": [],
                 "tokens_in": 0,
                 "tokens_out": 0,
+                "wall_clock_s": 0.0,
             }
 
         from aeh.events import write_jsonl
 
         write_jsonl(cassette_path, result.events)
-        ti, to = _token_totals(result.events)
         assertion_results = evaluate_assertions(result.final_state, result.tool_sequence, task.assertions)
         passed = result.error is None and all(a.passed for a in assertion_results)
 
@@ -463,8 +515,9 @@ class WebState:
             ],
             "judge": judge_out,
             "events": [_event_to_dict(e) for e in result.events],
-            "tokens_in": ti,
-            "tokens_out": to,
+            "tokens_in": result.tokens_in,
+            "tokens_out": result.tokens_out,
+            "wall_clock_s": result.wall_clock_s,
         }
 
 
@@ -541,9 +594,9 @@ def create_app(
         }
 
     @app.post("/api/suite/tasks")
-    def api_upsert_task(body: dict[str, Any]) -> Any:
-        editing_id = body.get("editing_id")
-        task_data = body.get("task") or {}
+    def api_upsert_task(body: TaskUpsertRequest) -> Any:
+        editing_id = body.editing_id
+        task_data = body.task
         existing_ids = {t.id for t in state.suite.tasks}
         errors = validate_task_dict(task_data, existing_ids, editing_id)
         if errors:
@@ -565,10 +618,10 @@ def create_app(
         return {"ok": True, "name": state.suite.name, "task_count": len(state.suite.tasks)}
 
     @app.post("/api/estimate")
-    def api_estimate(body: dict[str, Any]) -> dict[str, Any]:
-        task_ids = body.get("task_ids") or [t.id for t in state.suite.tasks]
-        seeds_override = body.get("seeds")
-        model = body.get("model", "gemini-2.5-flash-lite")
+    def api_estimate(body: EstimateRequest) -> dict[str, Any]:
+        task_ids = body.task_ids or [t.id for t in state.suite.tasks]
+        seeds_override = body.seeds
+        model = body.model
         n_seed_runs = 0
         for tid in task_ids:
             try:
@@ -578,7 +631,7 @@ def create_app(
             n_seed_runs += len(seeds_override or task.seeds)
         tokens_in = n_seed_runs * _ESTIMATED_TOKENS_IN_PER_SEED
         tokens_out = n_seed_runs * _ESTIMATED_TOKENS_OUT_PER_SEED
-        cost = _estimate_cost(model, tokens_in, tokens_out)
+        cost = estimate_cost(model, tokens_in, tokens_out)
         return {
             "seed_runs": n_seed_runs,
             "estimated_tokens_in": tokens_in,
@@ -588,12 +641,14 @@ def create_app(
         }
 
     @app.post("/api/runs")
-    def api_start_run(body: dict[str, Any]) -> dict[str, Any]:
-        task_ids = body.get("task_ids") or [t.id for t in state.suite.tasks]
+    def api_start_run(body: StartRunRequest) -> dict[str, Any]:
+        task_ids = body.task_ids or [t.id for t in state.suite.tasks]
         for tid in task_ids:
             if tid not in {t.id for t in state.suite.tasks}:
                 raise HTTPException(400, f"no such task: {tid}")
-        backend_name = body.get("backend", "fake")
+        backend_name = body.backend
+        if backend_name not in ("fake", "gemini"):
+            raise HTTPException(400, f"unknown backend: {backend_name!r}")
         if backend_name == "gemini" and not state.gemini_status()["ready"]:
             raise HTTPException(
                 400,
@@ -602,11 +657,11 @@ def create_app(
             )
         job = state.start_run(
             task_ids=task_ids,
-            seeds_override=body.get("seeds"),
+            seeds_override=body.seeds,
             backend_name=backend_name,
-            model=body.get("model", "gemini-2.5-flash-lite"),
-            temperature=float(body.get("temperature", 0.0)),
-            use_judge=bool(body.get("use_judge", True)),
+            model=body.model,
+            temperature=body.temperature,
+            use_judge=body.use_judge,
         )
         return {"run_id": job.id}
 
@@ -686,9 +741,9 @@ def create_app(
         }
 
     @app.post("/api/gate")
-    def api_gate(body: dict[str, Any]) -> dict[str, Any]:
-        run_id = body.get("run_id")
-        z = float(body.get("z", 1.96))
+    def api_gate(body: GateRequest) -> dict[str, Any]:
+        run_id = body.run_id
+        z = body.z
         job = state.runs.get(run_id) if run_id else None
         if job is None:
             raise HTTPException(404, "no such run")
@@ -724,9 +779,9 @@ def create_app(
         return {"rows": rows}
 
     @app.post("/api/calibration/relabel")
-    def api_relabel(body: dict[str, Any]) -> dict[str, Any]:
-        row_id = body["id"]
-        label = body["label"]
+    def api_relabel(body: RelabelRequest) -> dict[str, Any]:
+        row_id = body.id
+        label = body.label
         if label not in ("pass", "fail"):
             raise HTTPException(400, "label must be 'pass' or 'fail'")
         with state.calibration_lock:
@@ -740,21 +795,30 @@ def create_app(
         return {"ok": True}
 
     @app.post("/api/calibration/run")
-    def api_run_calibration(body: dict[str, Any]) -> dict[str, Any]:
-        backend_name = body.get("backend", "fake")
+    def api_run_calibration(body: CalibrationRunRequest) -> dict[str, Any]:
+        if body.split not in ("all", "tune", "holdout"):
+            raise HTTPException(400, f"unknown split: {body.split!r}")
+        if body.prompt_version not in PROMPT_VERSIONS:
+            raise HTTPException(400, f"unknown prompt version: {body.prompt_version!r}")
         try:
-            judge: JudgeBackend = GeminiJudge(model=body.get("model", "gemini-2.5-flash-lite")) if backend_name == "gemini" else OfflineRubricJudge()
+            judge: JudgeBackend = (
+                GeminiJudge(model=body.model, prompt_version=body.prompt_version)
+                if body.backend == "gemini"
+                else OfflineRubricJudge()
+            )
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(400, _friendly_backend_error(exc))
 
         rows = []
         for row in state.calibration_rows:
+            if body.split != "all" and row.get("split", "all") != body.split:
+                continue
             r = dict(row)
             r["human_label"] = state.calibration_overrides.get(row["id"], row["human_label"])
             rows.append(r)
 
         try:
-            result = run_calibration(judge, rows)
+            result = run_calibration(judge, rows, split=body.split)
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(400, _friendly_backend_error(exc))
 
@@ -762,9 +826,7 @@ def create_app(
         if isinstance(judge, GeminiJudge):
             out["tokens_in"] = judge.tokens_in
             out["tokens_out"] = judge.tokens_out
-            out["cost_estimate"] = _estimate_cost(
-                body.get("model", "gemini-2.5-flash-lite"), judge.tokens_in, judge.tokens_out
-            )
+            out["cost_estimate"] = estimate_cost(body.model, judge.tokens_in, judge.tokens_out)
         return out
 
     @app.get("/api/cassettes")
@@ -795,7 +857,7 @@ def create_app(
         return {"file": file_name, "events": [_event_to_dict(e) for e in events]}
 
     @app.post("/api/cassettes/{file_name}/replay")
-    def api_replay_cassette(file_name: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    def api_replay_cassette(file_name: str, body: ReplayCassetteRequest | None = None) -> dict[str, Any]:
         path = state.cassette_dir / file_name
         if not path.exists():
             raise HTTPException(404, "no such cassette")
@@ -809,11 +871,14 @@ def create_app(
         except (ValueError, KeyError) as exc:
             raise HTTPException(400, f"can't resolve task/seed for replay: {exc}") from exc
 
-        body = body or {}
-        on_div = OnDivergence(body.get("on_divergence", "passthrough"))
-        backend_name = body.get("backend", "gemini" if "gemini" in str(state.cassette_dir) else "fake")
+        body = body or ReplayCassetteRequest()
         try:
-            backend = state.make_backend(backend_name, body.get("model", "gemini-2.5-flash-lite"), 0.0)
+            on_div = OnDivergence(body.on_divergence)
+        except ValueError as exc:
+            raise HTTPException(400, f"unknown on_divergence policy: {body.on_divergence!r}") from exc
+        backend_name = body.backend or ("gemini" if "gemini" in str(state.cassette_dir) else "fake")
+        try:
+            backend = state.make_backend(backend_name, body.model, 0.0)
             result = run_task(task, seed, mode="replay", cassette_path=str(path), on_divergence=on_div, backend=backend)
         except DivergenceError as exc:
             return {"ok": False, "diverged": True, "error": str(exc), "diff": exc.diff}

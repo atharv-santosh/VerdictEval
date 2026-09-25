@@ -54,7 +54,8 @@ function el(tag, attrs, children) {
 
 function fmtPct(x) { return (x * 100).toFixed(0) + "%"; }
 function fmtNum(x) { return x == null ? "-" : x.toLocaleString(); }
-function fmtCost(x) { return x == null ? "-" : "$" + x.toFixed(4); }
+function fmtCost(x) { return x == null ? "-" : "$" + (Math.abs(x) < 0.001 && x !== 0 ? x.toFixed(6) : x.toFixed(4)); }
+function fmtSecs(x) { return x == null ? "-" : x.toFixed(2) + "s"; }
 
 // ---------------------------------------------------------------- shell
 
@@ -527,9 +528,12 @@ async function renderResultsView() {
       stats.push(el("div", { class: "stat" }, [el("span", { class: "v" }, [fmtNum(s.tokens_in)]), el("span", { class: "l" }, ["tokens in (measured)"])]));
       stats.push(el("div", { class: "stat" }, [el("span", { class: "v" }, [fmtNum(s.tokens_out)]), el("span", { class: "l" }, ["tokens out (measured)"])]));
       stats.push(el("div", { class: "stat" }, [el("span", { class: "v" }, [fmtCost(s.cost_estimate)]), el("span", { class: "l" }, ["cost (from measured tokens)"])]));
+      stats.push(el("div", { class: "stat" }, [el("span", { class: "v" }, [fmtCost(s.cost_per_solved_usd)]), el("span", { class: "l" }, ["cost per solved task"])]));
     } else {
       stats.push(el("div", { class: "stat" }, [el("span", { class: "v muted" }, ["n/a"]), el("span", { class: "l" }, ["tokens/cost (fake backend is free, offline)"])]));
     }
+    stats.push(el("div", { class: "stat" }, [el("span", { class: "v" }, [fmtSecs(s.p50_s)]), el("span", { class: "l" }, ["wall clock p50"])]));
+    stats.push(el("div", { class: "stat" }, [el("span", { class: "v" }, [fmtSecs(s.p95_s)]), el("span", { class: "l" }, ["wall clock p95"])]));
     gridSlot.appendChild(el("div", { class: "stat-row" }, stats));
 
     const allSeeds = new Set();
@@ -545,6 +549,10 @@ async function renderResultsView() {
           el("th", {}, ["Pass rate"]),
           el("th", {}, ["Flake score"]),
           el("th", {}, ["Verdict"]),
+          el("th", {}, ["Tokens"]),
+          el("th", {}, ["Cost"]),
+          el("th", {}, ["p50"]),
+          el("th", {}, ["p95"]),
         ]),
       ])
     );
@@ -565,6 +573,10 @@ async function renderResultsView() {
           el("td", { class: "num" }, [fmtPct(row.pass_rate)]),
           el("td", { class: "num" }, [row.flake_score.toFixed(2)]),
           el("td", {}, [el("span", { class: `pill verdict-pill ${row.verdict}` }, [row.verdict])]),
+          el("td", { class: "num" }, [fmtNum((row.cost_latency || {}).tokens_in) + " / " + fmtNum((row.cost_latency || {}).tokens_out)]),
+          el("td", { class: "num" }, [fmtCost((row.cost_latency || {}).cost_usd)]),
+          el("td", { class: "num" }, [fmtSecs((row.cost_latency || {}).p50_s)]),
+          el("td", { class: "num" }, [fmtSecs((row.cost_latency || {}).p95_s)]),
         ])
       );
     }
@@ -661,6 +673,12 @@ async function renderCalibrationView() {
 
   const backendSelect = el("select", {}, [el("option", { value: "fake" }, ["offline stub judge"]), el("option", { value: "gemini" }, ["gemini judge (real, billed)"])]);
   const modelInput = el("input", { type: "text", value: "gemini-2.5-flash-lite" });
+  const splitSelect = el("select", {}, [
+    el("option", { value: "holdout" }, ["holdout (reported)"]),
+    el("option", { value: "tune" }, ["tune (prompt developed here)"]),
+    el("option", { value: "all" }, ["all rows"]),
+  ]);
+  const promptSelect = el("select", {}, [el("option", { value: "plain" }, ["plain prompt"]), el("option", { value: "guided" }, ["guided prompt"])]);
   const resultSlot = el("div", { id: "calibration-result" });
 
   v.appendChild(
@@ -668,7 +686,9 @@ async function renderCalibrationView() {
       el("div", { class: "row" }, [
         el("div", { class: "col grow" }, [el("label", {}, ["Judge backend"]), backendSelect]),
         el("div", { class: "col grow" }, [el("label", {}, ["Model"]), modelInput]),
-        el("button", { class: "btn primary", onclick: () => runCalibration(backendSelect.value, modelInput.value) }, ["Run judge over set"]),
+        el("div", { class: "col grow" }, [el("label", {}, ["Split"]), splitSelect]),
+        el("div", { class: "col grow" }, [el("label", {}, ["Prompt"]), promptSelect]),
+        el("button", { class: "btn primary", onclick: () => runCalibration(backendSelect.value, modelInput.value, splitSelect.value, promptSelect.value) }, ["Run judge over set"]),
         el("button", { class: "btn", onclick: resetLabels }, ["Reset relabels"]),
       ]),
     ])
@@ -676,7 +696,7 @@ async function renderCalibrationView() {
 
   const tableWrap = el("div", { class: "grid-wrap" });
   const table = el("table", { class: "grid" });
-  table.appendChild(el("thead", {}, [el("tr", {}, [el("th", {}, ["ID"]), el("th", {}, ["Expect substring"]), el("th", {}, ["Human label"]), el("th", {}, ["Judge label"])])]));
+  table.appendChild(el("thead", {}, [el("tr", {}, [el("th", {}, ["ID"]), el("th", {}, ["Split"]), el("th", {}, ["Expect substring"]), el("th", {}, ["Human label"]), el("th", {}, ["Judge label"])])]));
   const tbody = el("tbody", {});
   table.appendChild(tbody);
   tableWrap.appendChild(table);
@@ -700,6 +720,7 @@ async function renderCalibrationView() {
       tbody.appendChild(
         el("tr", { class: mismatch ? "diff-row regressed" : "" }, [
           el("td", { class: "mono" }, [row.id]),
+          el("td", { class: "mono" }, [row.split || "-"]),
           el("td", {}, [row.rubric_hint && row.rubric_hint.expect_substring != null ? String(row.rubric_hint.expect_substring) : "-"]),
           el("td", {}, [labelSelect]),
           el("td", {}, [judgeLabel || "-"]),
@@ -719,15 +740,18 @@ async function renderCalibrationView() {
     toast("Relabels reset");
   }
 
-  async function runCalibration(backend, model) {
+  async function runCalibration(backend, model, split, prompt_version) {
     resultSlot.innerHTML = "<p class='muted small'>Running judge...</p>";
     try {
-      const result = await api("/api/calibration/run", { method: "POST", body: JSON.stringify({ backend, model }) });
+      const result = await api("/api/calibration/run", { method: "POST", body: JSON.stringify({ backend, model, split, prompt_version }) });
       state.calibrationResult = result;
       const judgeByAdmin = {};
       for (const d of result.disagreements) judgeByAdmin[d.id] = d.judge_label;
-      // also fill agreements: derive from confusion is not per-row, so best effort: mark matches as human label
-      for (const row of state.calibrationRows) if (!(row.id in judgeByAdmin)) judgeByAdmin[row.id] = row.human_label;
+      // the judge only saw the selected split; every row it agreed on matches the human label
+      for (const row of state.calibrationRows) {
+        if (row.id in judgeByAdmin) continue;
+        judgeByAdmin[row.id] = split === "all" || row.split === split ? row.human_label : null;
+      }
       renderRows(judgeByAdmin);
 
       resultSlot.innerHTML = "";
@@ -736,6 +760,8 @@ async function renderCalibrationView() {
           el("div", { class: "stat" }, [el("span", { class: "v" }, [String(result.n)]), el("span", { class: "l" }, ["n"])]),
           el("div", { class: "stat" }, [el("span", { class: "v" }, [fmtPct(result.raw_agreement)]), el("span", { class: "l" }, ["raw agreement"])]),
           el("div", { class: "stat" }, [el("span", { class: "v" }, [result.kappa.toFixed(3)]), el("span", { class: "l" }, ["Cohen's kappa"])]),
+          el("div", { class: "stat" }, [el("span", { class: "v" }, [`[${result.kappa_ci_low.toFixed(3)}, ${result.kappa_ci_high.toFixed(3)}]`]), el("span", { class: "l" }, ["95% bootstrap CI"])]),
+          el("div", { class: "stat" }, [el("span", { class: "v" }, [result.split]), el("span", { class: "l" }, ["split"])]),
           result.cost_estimate != null ? el("div", { class: "stat" }, [el("span", { class: "v" }, [fmtCost(result.cost_estimate)]), el("span", { class: "l" }, ["cost"])]) : null,
         ])
       );

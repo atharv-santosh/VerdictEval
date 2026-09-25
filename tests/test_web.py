@@ -149,6 +149,13 @@ def test_fake_backend_run_end_to_end(client):
     assert fix_row["pass_rate"] == 1.0
     assert fix_row["verdict"] == "stable-pass"
 
+    cl = fix_row["cost_latency"]
+    assert cl["tokens_in"] > 0
+    assert cl["p95_s"] >= cl["p50_s"] >= 0.0
+    summary = grid["summary"]
+    assert summary["solved_seed_runs"] > 0
+    assert summary["p95_s"] >= summary["p50_s"] >= 0.0
+
     traj = client.get("/api/runs/{}/trajectory/fix_max_retries/1".format(run_id)).json()
     assert traj["passed"] is True
     assert traj["assertions"]
@@ -220,9 +227,48 @@ def test_calibration_offline_judge(client):
     resp = client.post("/api/calibration/run", json={"backend": "fake"})
     assert resp.status_code == 200
     result = resp.json()
-    assert result["n"] == 23
+    assert result["n"] == 66
     assert 0.0 <= result["kappa"] <= 1.0
+    assert result["kappa_ci_low"] <= result["kappa"] <= result["kappa_ci_high"]
     assert "confusion" in result
+
+
+def test_calibration_split_selects_half_the_rows(client):
+    tune = client.post("/api/calibration/run", json={"backend": "fake", "split": "tune"}).json()
+    holdout = client.post("/api/calibration/run", json={"backend": "fake", "split": "holdout"}).json()
+    assert tune["n"] == 33
+    assert holdout["n"] == 33
+    assert tune["split"] == "tune"
+    assert holdout["split"] == "holdout"
+
+
+@pytest.mark.parametrize(
+    "path,body",
+    [
+        ("/api/runs", {"backend": "fake", "backedn": "gemini"}),
+        ("/api/estimate", {"model": "gemini-2.5-flash-lite", "seed": [1]}),
+        ("/api/gate", {"run_id": "x", "zz": 1.0}),
+        ("/api/calibration/run", {"backend": "fake", "prompt": "plain"}),
+        ("/api/calibration/relabel", {"id": "t-clean-pass-retries", "label": "pass", "why": "typo"}),
+        ("/api/suite/tasks", {"task": {}, "editing": None}),
+    ],
+)
+def test_unknown_request_field_is_rejected(client, path, body):
+    """A misspelled field must not be silently dropped: a request that means to use a real model would otherwise quietly run the fake backend."""
+    resp = client.post(path, json=body)
+    assert resp.status_code == 422
+    assert "extra" in resp.text.lower() or "forbidden" in resp.text.lower()
+
+
+def test_unknown_field_on_cassette_replay_is_rejected(client):
+    file_name = client.get("/api/cassettes").json()["cassettes"][0]["file"]
+    resp = client.post(f"/api/cassettes/{file_name}/replay", json={"backend": "fake", "on_divergance": "fail"})
+    assert resp.status_code == 422
+
+
+def test_wrong_typed_field_is_rejected(client):
+    resp = client.post("/api/runs", json={"backend": "fake", "temperature": "hot"})
+    assert resp.status_code == 422
 
 
 def test_calibration_relabel_changes_result(client):
