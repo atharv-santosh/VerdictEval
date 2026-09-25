@@ -1,4 +1,11 @@
-"""Programmatic scorers: final-state checks, tool-sequence matchers, forbidden actions."""
+"""Programmatic scorers: final-state checks, tool-path matchers, forbidden actions.
+
+Tool-path assertions come in three strengths. ``tool_sequence`` with ``mode:
+exact`` pins the whole path and breaks whenever a model explores. ``mode:
+subsequence`` requires the named calls in order but tolerates extra calls around
+them. ``required_tools`` drops order entirely and asks only that each named tool
+was used. The weaker two express intent; the exact mode expresses a script.
+"""
 
 from __future__ import annotations
 
@@ -33,6 +40,9 @@ def _file_equals(final_state: dict[str, Any], spec: dict[str, Any]) -> Assertion
     return AssertionResult("file_equals", passed, msg)
 
 
+TOOL_SEQUENCE_MODES = ("exact", "subsequence", "set")
+
+
 def _tool_sequence(tool_sequence: list[str], spec: dict[str, Any]) -> AssertionResult:
     expected = spec["sequence"]
     mode = spec.get("mode", "exact")
@@ -41,10 +51,26 @@ def _tool_sequence(tool_sequence: list[str], spec: dict[str, Any]) -> AssertionR
     elif mode == "subsequence":
         it = iter(tool_sequence)
         passed = all(any(x == want for x in it) for want in expected)
+    elif mode == "set":
+        passed = set(expected).issubset(set(tool_sequence))
     else:
         raise ValueError(f"unknown tool_sequence mode: {mode!r}")
     msg = f"tool sequence {tool_sequence} vs expected {expected} ({mode}): {'ok' if passed else 'FAIL'}"
     return AssertionResult("tool_sequence", passed, msg)
+
+
+def _required_tools(tool_sequence: list[str], spec: dict[str, Any]) -> AssertionResult:
+    """Order-free set containment: every named tool was called at least once, in any order, with any amount of exploration around it."""
+    required = set(spec["tools"])
+    called = set(tool_sequence)
+    missing = sorted(required - called)
+    passed = not missing
+    msg = (
+        f"required tools {sorted(required)} all called"
+        if passed
+        else f"required tools {sorted(required)} NOT all called; missing {missing} (called {tool_sequence})"
+    )
+    return AssertionResult("required_tools", passed, msg)
 
 
 def _forbidden_tool(tool_sequence: list[str], spec: dict[str, Any]) -> AssertionResult:
@@ -66,9 +92,13 @@ _HANDLERS = {
     "file_contains": lambda fs, ts, spec: _file_contains(fs, spec),
     "file_equals": lambda fs, ts, spec: _file_equals(fs, spec),
     "tool_sequence": lambda fs, ts, spec: _tool_sequence(ts, spec),
+    "required_tools": lambda fs, ts, spec: _required_tools(ts, spec),
     "forbidden_tool": lambda fs, ts, spec: _forbidden_tool(ts, spec),
     "status_equals": lambda fs, ts, spec: _status_equals(fs, spec),
 }
+
+
+ASSERTION_TYPES: tuple[str, ...] = tuple(sorted(_HANDLERS))
 
 
 def evaluate_assertions(

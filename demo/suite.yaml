@@ -35,7 +35,7 @@ tasks:
     sequence:
     - read_file
     - write_file
-    mode: exact
+    mode: subsequence
   rubric: Did the agent set max_retries to 5 while preserving the timeout setting?
   seeds:
   - 1
@@ -79,7 +79,7 @@ tasks:
     sequence:
     - read_file
     - write_file
-    mode: exact
+    mode: subsequence
   rubric: Did the agent enable debug mode while leaving log_level untouched?
   seeds:
   - 1
@@ -116,11 +116,9 @@ tasks:
   - type: file_contains
     path: svc.yaml
     text: 'port: 8080'
-  - type: tool_sequence
-    sequence:
-    - read_file
+  - type: required_tools
+    tools:
     - write_file
-    mode: exact
   rubric: Did the agent change the service port to 8080?
   seeds:
   - 1
@@ -153,11 +151,9 @@ tasks:
   - type: file_contains
     path: OWNERS
     text: 'owner: platform-team'
-  - type: tool_sequence
-    sequence:
-    - read_file
+  - type: required_tools
+    tools:
     - write_file
-    mode: exact
   rubric: Did the agent assign ownership to platform-team?
   seeds:
   - 1
@@ -203,11 +199,9 @@ tasks:
   - type: file_contains
     path: ticket.md
     text: 'status: resolved'
-  - type: tool_sequence
-    sequence:
-    - read_file
+  - type: required_tools
+    tools:
     - write_file
-    mode: exact
   rubric: Did the agent mark the ticket as resolved?
   seeds:
   - 1
@@ -254,11 +248,9 @@ tasks:
   - type: file_contains
     path: deploy.yaml
     text: 'replicas: 3'
-  - type: tool_sequence
-    sequence:
-    - read_file
+  - type: required_tools
+    tools:
     - write_file
-    mode: exact
   rubric: Did the agent scale the deployment to 3 replicas?
   seeds:
   - 1
@@ -301,9 +293,8 @@ tasks:
   - type: tool_sequence
     sequence:
     - search
-    - read_file
     - write_file
-    mode: exact
+    mode: subsequence
   rubric: Did the agent locate the file containing API_KEY and rotate its value?
   seeds:
   - 1
@@ -340,11 +331,9 @@ tasks:
     text: 'feature_flag: on'
   - type: forbidden_tool
     tool: search
-  - type: tool_sequence
-    sequence:
-    - read_file
+  - type: required_tools
+    tools:
     - write_file
-    mode: subsequence
   rubric: Did the agent turn on feature_flag without needlessly searching?
   seeds:
   - 1
@@ -383,12 +372,9 @@ tasks:
   - type: file_contains
     path: keep.txt
     text: keep me
-  - type: tool_sequence
-    sequence:
-    - list_files
-    - read_file
+  - type: required_tools
+    tools:
     - write_file
-    mode: subsequence
   rubric: Did the agent empty the temp file without disturbing keep.txt?
   seeds:
   - 1

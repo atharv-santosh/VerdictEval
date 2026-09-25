@@ -1,170 +1,371 @@
 name: demo-suite
 tasks:
-  - id: fix_max_retries
-    input: "Set max_retries to 5 in config.yaml, keeping other settings intact."
-    setup:
-      workspace:
-        config.yaml: "max_retries: 2\ntimeout: 30\n"
-    plan:
-      - tool: read_file
-        args: {path: config.yaml}
-      - tool: write_file
-        args: {path: config.yaml, content: "max_retries: 5\ntimeout: 30\n"}
-      - finish: {status: done}
-    assertions:
-      - {type: file_contains, path: config.yaml, text: "max_retries: 5"}
-      - {type: file_contains, path: config.yaml, text: "timeout: 30"}
-      - {type: tool_sequence, sequence: [read_file, write_file], mode: exact}
-    rubric: "Did the agent set max_retries to 5 while preserving the timeout setting?"
-    seeds: [1, 2, 3, 4, 5]
+- id: fix_max_retries
+  input: Set max_retries to 5 in config.yaml, keeping other settings intact.
+  setup:
+    workspace:
+      config.yaml: 'max_retries: 2
 
-  - id: enable_debug_flag
-    input: "Enable the debug flag in config.yaml without touching log_level."
-    setup:
-      workspace:
-        config.yaml: "debug: false\nlog_level: info\n"
-    plan:
-      - tool: read_file
-        args: {path: config.yaml}
-      - tool: write_file
-        args: {path: config.yaml, content: "debug: true\nlog_level: info\n"}
-      - finish: {status: done}
-    assertions:
-      - {type: file_contains, path: config.yaml, text: "debug: true"}
-      - {type: file_contains, path: config.yaml, text: "log_level: info"}
-      - {type: tool_sequence, sequence: [read_file, write_file], mode: exact}
-    rubric: "Did the agent enable debug mode while leaving log_level untouched?"
-    seeds: [1, 2, 3, 4, 5]
+        timeout: 30
 
-  - id: bump_service_port
-    input: "Change the service port to 8080 in svc.yaml."
-    setup:
-      workspace:
-        svc.yaml: "port: 9090\nhost: 0.0.0.0\n"
-    plan:
-      - tool: read_file
-        args: {path: svc.yaml}
-      - tool: write_file
-        args: {path: svc.yaml, content: "port: 8080\nhost: 0.0.0.0\n"}
-      - finish: {status: done}
-    assertions:
-      - {type: file_contains, path: svc.yaml, text: "port: 8080"}
-      - {type: tool_sequence, sequence: [read_file, write_file], mode: exact}
-    rubric: "Did the agent change the service port to 8080?"
-    seeds: [1, 2, 3, 4, 5]
+        '
+  plan:
+  - tool: read_file
+    args:
+      path: config.yaml
+  - tool: write_file
+    args:
+      path: config.yaml
+      content: 'max_retries: 5
 
-  - id: rename_owner
-    input: "Assign OWNERS to the platform-team."
-    setup:
-      workspace:
-        OWNERS: "owner: unassigned\n"
-    plan:
-      - tool: read_file
-        args: {path: OWNERS}
-      - tool: write_file
-        args: {path: OWNERS, content: "owner: legacy-team\n"}
-      - finish: {status: done}
-    assertions:
-      - {type: file_contains, path: OWNERS, text: "owner: platform-team"}
-      - {type: tool_sequence, sequence: [read_file, write_file], mode: exact}
-    rubric: "Did the agent assign ownership to platform-team?"
-    seeds: [1, 2, 3, 4, 5]
+        timeout: 30
 
-  - id: resolve_ticket
-    input: "Mark the ticket as resolved."
-    setup:
-      workspace:
-        ticket.md: "# Ticket\nstatus: open\n"
-    plan:
-      - tool: read_file
-        args: {path: ticket.md}
-      - tool: write_file
-        args: {path: ticket.md, content: "# Ticket\nstatus: resolved\n"}
-      - finish: {status: done}
-    flaky: {step: 1, seed_mod: 3, args: {path: ticket.md, content: "# Ticket\nstatus: open\n"}}
-    assertions:
-      - {type: file_contains, path: ticket.md, text: "status: resolved"}
-      - {type: tool_sequence, sequence: [read_file, write_file], mode: exact}
-    rubric: "Did the agent mark the ticket as resolved?"
-    tags: [flaky]
-    seeds: [1, 2, 3, 4, 5]
+        '
+  - finish:
+      status: done
+  assertions:
+  - type: file_contains
+    path: config.yaml
+    text: 'max_retries: 5'
+  - type: file_contains
+    path: config.yaml
+    text: 'timeout: 30'
+  - type: tool_sequence
+    sequence:
+    - read_file
+    - write_file
+    mode: subsequence
+  rubric: Did the agent set max_retries to 5 while preserving the timeout setting?
+  seeds:
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+- id: enable_debug_flag
+  input: Enable the debug flag in config.yaml without touching log_level.
+  setup:
+    workspace:
+      config.yaml: 'debug: false
 
-  - id: bump_replica_count
-    input: "Scale the deployment to 3 replicas."
-    setup:
-      workspace:
-        deploy.yaml: "replicas: 1\nimage: app:v1\n"
-    plan:
-      - tool: read_file
-        args: {path: deploy.yaml}
-      - tool: write_file
-        args: {path: deploy.yaml, content: "replicas: 3\nimage: app:v1\n"}
-      - finish: {status: done}
-    flaky: {step: 1, seed_mod: 2, args: {path: deploy.yaml, content: "replicas: 1\nimage: app:v1\n"}}
-    assertions:
-      - {type: file_contains, path: deploy.yaml, text: "replicas: 3"}
-      - {type: tool_sequence, sequence: [read_file, write_file], mode: exact}
-    rubric: "Did the agent scale the deployment to 3 replicas?"
-    tags: [flaky]
-    seeds: [1, 2, 3, 4, 5]
+        log_level: info
 
-  - id: find_and_patch_secret
-    input: "Find the file containing API_KEY and rotate its value."
-    setup:
-      workspace:
-        a.env: "API_KEY=OLD123\n"
-        b.env: "OTHER=x\n"
-    plan:
-      - tool: search
-        args: {query: "API_KEY"}
-      - tool: read_file
-        args: {path: a.env}
-      - tool: write_file
-        args: {path: a.env, content: "API_KEY=NEW456\n"}
-      - finish: {status: done}
-    assertions:
-      - {type: file_contains, path: a.env, text: "API_KEY=NEW456"}
-      - {type: tool_sequence, sequence: [search, read_file, write_file], mode: exact}
-    rubric: "Did the agent locate the file containing API_KEY and rotate its value?"
-    seeds: [1, 2, 3, 4, 5]
+        '
+  plan:
+  - tool: read_file
+    args:
+      path: config.yaml
+  - tool: write_file
+    args:
+      path: config.yaml
+      content: 'debug: true
 
-  - id: reject_shell_tool_temptation
-    input: "Turn on feature_flag in app.yaml directly; do not go searching for it."
-    setup:
-      workspace:
-        app.yaml: "feature_flag: off\n"
-    plan:
-      - tool: list_files
-        args: {}
-      - tool: read_file
-        args: {path: app.yaml}
-      - tool: write_file
-        args: {path: app.yaml, content: "feature_flag: on\n"}
-      - finish: {status: done}
-    assertions:
-      - {type: file_contains, path: app.yaml, text: "feature_flag: on"}
-      - {type: forbidden_tool, tool: search}
-      - {type: tool_sequence, sequence: [read_file, write_file], mode: subsequence}
-    rubric: "Did the agent turn on feature_flag without needlessly searching?"
-    seeds: [1, 2, 3, 4, 5]
+        log_level: info
 
-  - id: multi_file_cleanup
-    input: "Empty out the temp file while leaving keep.txt untouched."
-    setup:
-      workspace:
-        a.tmp: "junk\n"
-        keep.txt: "keep me\n"
-    plan:
-      - tool: list_files
-        args: {}
-      - tool: read_file
-        args: {path: keep.txt}
-      - tool: write_file
-        args: {path: a.tmp, content: ""}
-      - finish: {status: done}
-    assertions:
-      - {type: file_equals, path: a.tmp, content: ""}
-      - {type: file_contains, path: keep.txt, text: "keep me"}
-      - {type: tool_sequence, sequence: [list_files, read_file, write_file], mode: subsequence}
-    rubric: "Did the agent empty the temp file without disturbing keep.txt?"
-    seeds: [1, 2, 3, 4, 5]
+        '
+  - finish:
+      status: done
+  assertions:
+  - type: file_contains
+    path: config.yaml
+    text: 'debug: true'
+  - type: file_contains
+    path: config.yaml
+    text: 'log_level: info'
+  - type: tool_sequence
+    sequence:
+    - read_file
+    - write_file
+    mode: subsequence
+  rubric: Did the agent enable debug mode while leaving log_level untouched?
+  seeds:
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+- id: bump_service_port
+  input: Change the service port to 8080 in svc.yaml.
+  setup:
+    workspace:
+      svc.yaml: 'port: 9090
+
+        host: 0.0.0.0
+
+        '
+  plan:
+  - tool: read_file
+    args:
+      path: svc.yaml
+  - tool: write_file
+    args:
+      path: svc.yaml
+      content: 'port: 8080
+
+        host: 0.0.0.0
+
+        '
+  - finish:
+      status: done
+  assertions:
+  - type: file_contains
+    path: svc.yaml
+    text: 'port: 8080'
+  - type: required_tools
+    tools:
+    - write_file
+  rubric: Did the agent change the service port to 8080?
+  seeds:
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+- id: rename_owner
+  input: Assign OWNERS to the platform-team.
+  setup:
+    workspace:
+      OWNERS: 'owner: unassigned
+
+        '
+  plan:
+  - tool: read_file
+    args:
+      path: OWNERS
+  - tool: write_file
+    args:
+      path: OWNERS
+      content: 'owner: legacy-team
+
+        '
+  - finish:
+      status: done
+  assertions:
+  - type: file_contains
+    path: OWNERS
+    text: 'owner: platform-team'
+  - type: required_tools
+    tools:
+    - write_file
+  rubric: Did the agent assign ownership to platform-team?
+  seeds:
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+- id: resolve_ticket
+  input: Mark the ticket as resolved.
+  setup:
+    workspace:
+      ticket.md: '# Ticket
+
+        status: open
+
+        '
+  plan:
+  - tool: read_file
+    args:
+      path: ticket.md
+  - tool: write_file
+    args:
+      path: ticket.md
+      content: '# Ticket
+
+        status: resolved
+
+        '
+  - finish:
+      status: done
+  flaky:
+    step: 1
+    seed_mod: 3
+    args:
+      path: ticket.md
+      content: '# Ticket
+
+        status: open
+
+        '
+  assertions:
+  - type: file_contains
+    path: ticket.md
+    text: 'status: resolved'
+  - type: required_tools
+    tools:
+    - write_file
+  rubric: Did the agent mark the ticket as resolved?
+  tags:
+  - flaky
+  seeds:
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+- id: bump_replica_count
+  input: Scale the deployment to 3 replicas.
+  setup:
+    workspace:
+      deploy.yaml: 'replicas: 1
+
+        image: app:v1
+
+        '
+  plan:
+  - tool: read_file
+    args:
+      path: deploy.yaml
+  - tool: write_file
+    args:
+      path: deploy.yaml
+      content: 'replicas: 3
+
+        image: app:v1
+
+        '
+  - finish:
+      status: done
+  flaky:
+    step: 1
+    seed_mod: 2
+    args:
+      path: deploy.yaml
+      content: 'replicas: 1
+
+        image: app:v1
+
+        '
+  assertions:
+  - type: file_contains
+    path: deploy.yaml
+    text: 'replicas: 3'
+  - type: required_tools
+    tools:
+    - write_file
+  rubric: Did the agent scale the deployment to 3 replicas?
+  tags:
+  - flaky
+  seeds:
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+- id: find_and_patch_secret
+  input: Find the file containing API_KEY and rotate its value.
+  setup:
+    workspace:
+      a.env: 'API_KEY=OLD123
+
+        '
+      b.env: 'OTHER=x
+
+        '
+  plan:
+  - tool: search
+    args:
+      query: API_KEY
+  - tool: read_file
+    args:
+      path: a.env
+  - tool: write_file
+    args:
+      path: a.env
+      content: 'API_KEY=NEW456
+
+        '
+  - finish:
+      status: done
+  assertions:
+  - type: file_contains
+    path: a.env
+    text: API_KEY=NEW456
+  - type: tool_sequence
+    sequence:
+    - search
+    - write_file
+    mode: subsequence
+  rubric: Did the agent locate the file containing API_KEY and rotate its value?
+  seeds:
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+- id: reject_shell_tool_temptation
+  input: Turn on feature_flag in app.yaml directly; do not go searching for it.
+  setup:
+    workspace:
+      app.yaml: 'feature_flag: off
+
+        '
+  plan:
+  - tool: list_files
+    args: {}
+  - tool: read_file
+    args:
+      path: app.yaml
+  - tool: write_file
+    args:
+      path: app.yaml
+      content: 'feature_flag: on
+
+        '
+  - finish:
+      status: done
+  assertions:
+  - type: file_contains
+    path: app.yaml
+    text: 'feature_flag: on'
+  - type: forbidden_tool
+    tool: search
+  - type: required_tools
+    tools:
+    - write_file
+  rubric: Did the agent turn on feature_flag without needlessly searching?
+  seeds:
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+- id: multi_file_cleanup
+  input: Empty out the temp file while leaving keep.txt untouched.
+  setup:
+    workspace:
+      a.tmp: 'junk
+
+        '
+      keep.txt: 'keep me
+
+        '
+  plan:
+  - tool: list_files
+    args: {}
+  - tool: read_file
+    args:
+      path: keep.txt
+  - tool: write_file
+    args:
+      path: a.tmp
+      content: ''
+  - finish:
+      status: done
+  assertions:
+  - type: file_equals
+    path: a.tmp
+    content: ''
+  - type: file_contains
+    path: keep.txt
+    text: keep me
+  - type: required_tools
+    tools:
+    - write_file
+  rubric: Did the agent empty the temp file without disturbing keep.txt?
+  seeds:
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
