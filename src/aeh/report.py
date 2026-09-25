@@ -7,8 +7,8 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from aeh.flakiness import TaskFlakinessReport
 from aeh.gate import TaskDiff
+from aeh.metrics import fmt_cost
 
 
 @dataclass(slots=True)
@@ -22,6 +22,11 @@ class TaskReportRow:
     flake_score: float
     verdict: str
     tags: list[str]
+    tokens_in: int = 0
+    tokens_out: int = 0
+    cost_usd: float | None = None
+    p50_s: float = 0.0
+    p95_s: float = 0.0
 
 
 def render_terminal(
@@ -29,16 +34,27 @@ def render_terminal(
     rows: list[TaskReportRow],
     diffs: list[TaskDiff] | None = None,
     calibration: dict[str, Any] | None = None,
+    totals: dict[str, Any] | None = None,
 ) -> str:
     """Render a compact, readable terminal report."""
     lines = [f"=== aeh report: {suite_name} ===", ""]
-    lines.append(f"{'task':<28} {'pass':>6} {'flake':>7}  verdict      tags")
-    lines.append("-" * 70)
+    lines.append(
+        f"{'task':<28} {'pass':>6} {'flake':>7}  {'verdict':<11}  {'tok in':>7} {'tok out':>7} "
+        f"{'cost':>9} {'p50 s':>7} {'p95 s':>7}  tags"
+    )
+    lines.append("-" * 110)
     for row in sorted(rows, key=lambda r: r.flake_score, reverse=True):
         pass_str = f"{row.passes}/{row.n}"
         lines.append(
-            f"{row.task_id:<28} {pass_str:>6} {row.flake_score:>7.2f}  {row.verdict:<11}  {','.join(row.tags)}"
+            f"{row.task_id:<28} {pass_str:>6} {row.flake_score:>7.2f}  {row.verdict:<11}  "
+            f"{row.tokens_in:>7} {row.tokens_out:>7} {fmt_cost(row.cost_usd):>9} "
+            f"{row.p50_s:>7.2f} {row.p95_s:>7.2f}  {','.join(row.tags)}"
         )
+
+    if totals:
+        lines.append("")
+        lines.append("=== cost and latency ===")
+        lines.append(render_totals(totals))
 
     if diffs:
         lines.append("")
@@ -54,9 +70,37 @@ def render_terminal(
     if calibration:
         lines.append("")
         lines.append("=== judge calibration ===")
-        lines.append(f"n={calibration['n']}  raw_agreement={calibration['raw_agreement']:.3f}  kappa={calibration['kappa']:.3f}")
+        lines.append(_calibration_line(calibration))
 
     return "\n".join(lines)
+
+
+def _calibration_line(calibration: dict[str, Any]) -> str:
+    split = calibration.get("split", "all")
+    line = (
+        f"split={split}  n={calibration['n']}  raw_agreement={calibration['raw_agreement']:.3f}  "
+        f"kappa={calibration['kappa']:.3f}"
+    )
+    if "kappa_ci_low" in calibration:
+        line += f"  95% CI [{calibration['kappa_ci_low']:.3f}, {calibration['kappa_ci_high']:.3f}]"
+    return line
+
+
+def render_totals(totals: dict[str, Any]) -> str:
+    """One-block suite-level tokens, dollars, wall-clock percentiles and cost per solved task."""
+    cl = totals["cost_latency"]
+    per_solved = totals.get("cost_per_solved_usd")
+    model = totals.get("model") or "(unpriced)"
+    return "\n".join(
+        [
+            f"model              {model}",
+            f"tokens             in={cl['tokens_in']}  out={cl['tokens_out']}",
+            f"cost               {fmt_cost(cl['cost_usd'])}",
+            f"wall clock         p50={cl['p50_s']:.2f}s  p95={cl['p95_s']:.2f}s  (n={cl['n']} seed runs)",
+            f"solved             {totals['solved_seed_runs']}/{totals['total_seed_runs']} seed runs",
+            f"cost per solved    {fmt_cost(per_solved)}",
+        ]
+    )
 
 
 def render_html(
@@ -64,6 +108,7 @@ def render_html(
     rows: list[TaskReportRow],
     diffs: list[TaskDiff] | None = None,
     calibration: dict[str, Any] | None = None,
+    totals: dict[str, Any] | None = None,
 ) -> str:
     """Render a self-contained single-file HTML report (no external assets)."""
 
@@ -72,9 +117,30 @@ def render_html(
 
     task_rows_html = "\n".join(
         f"<tr class='{esc(row.verdict)}'><td>{esc(row.task_id)}</td><td>{row.passes}/{row.n}</td>"
-        f"<td>{row.flake_score:.2f}</td><td>{esc(row.verdict)}</td><td>{esc(', '.join(row.tags))}</td></tr>"
+        f"<td>{row.flake_score:.2f}</td><td>{esc(row.verdict)}</td>"
+        f"<td class='num'>{row.tokens_in}</td><td class='num'>{row.tokens_out}</td>"
+        f"<td class='num'>{esc(fmt_cost(row.cost_usd))}</td>"
+        f"<td class='num'>{row.p50_s:.2f}</td><td class='num'>{row.p95_s:.2f}</td>"
+        f"<td>{esc(', '.join(row.tags))}</td></tr>"
         for row in sorted(rows, key=lambda r: r.flake_score, reverse=True)
     )
+
+    totals_html = ""
+    if totals:
+        cl = totals["cost_latency"]
+        totals_html = (
+            "<h2>Cost and latency</h2>"
+            "<table>"
+            "<tr><th>model</th><th>tokens in</th><th>tokens out</th><th>cost</th>"
+            "<th>wall clock p50</th><th>wall clock p95</th><th>solved</th><th>cost per solved task</th></tr>"
+            f"<tr><td>{esc(totals.get('model') or '(unpriced)')}</td>"
+            f"<td class='num'>{cl['tokens_in']}</td><td class='num'>{cl['tokens_out']}</td>"
+            f"<td class='num'>{esc(fmt_cost(cl['cost_usd']))}</td>"
+            f"<td class='num'>{cl['p50_s']:.2f}s</td><td class='num'>{cl['p95_s']:.2f}s</td>"
+            f"<td class='num'>{totals['solved_seed_runs']}/{totals['total_seed_runs']}</td>"
+            f"<td class='num'>{esc(fmt_cost(totals.get('cost_per_solved_usd')))}</td></tr>"
+            "</table>"
+        )
 
     diff_rows_html = ""
     if diffs:
@@ -89,8 +155,7 @@ def render_html(
     calibration_html = ""
     if calibration:
         calibration_html = (
-            f"<p>n={calibration['n']} &nbsp; raw agreement={calibration['raw_agreement']:.3f} "
-            f"&nbsp; Cohen's kappa={calibration['kappa']:.3f}</p>"
+            f"<p>{esc(_calibration_line(calibration))}</p>"
             f"<pre>{esc(json.dumps(calibration['confusion'], indent=2, sort_keys=True))}</pre>"
         )
 
@@ -113,6 +178,7 @@ def render_html(
   tr.improved {{ background: #eefaf0; }}
   tr.new {{ background: #eef2fb; }}
   pre {{ background: #f5f5f5; padding: 1rem; overflow-x: auto; }}
+  td.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
 </style>
 </head>
 <body>
@@ -120,9 +186,11 @@ def render_html(
 
 <h2>Task grid</h2>
 <table>
-<tr><th>task</th><th>pass</th><th>flake score</th><th>verdict</th><th>tags</th></tr>
+<tr><th>task</th><th>pass</th><th>flake score</th><th>verdict</th><th>tokens in</th><th>tokens out</th><th>cost</th><th>p50 s</th><th>p95 s</th><th>tags</th></tr>
 {task_rows_html}
 </table>
+
+{totals_html}
 
 {"<h2>Regression gate</h2><table><tr><th>task</th><th>baseline</th><th>current</th><th>classification</th></tr>" + diff_rows_html + "</table>" if diffs else ""}
 

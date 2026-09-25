@@ -19,15 +19,11 @@ from aeh.cassette import OnDivergence
 from aeh.events import write_jsonl
 from aeh.flakiness import SeedOutcome, analyze
 from aeh.gate import diff_against_baseline, has_regression
-from aeh.report import TaskReportRow, render_html, render_terminal
+from aeh.metrics import cost_per_solved, estimate_cost, fmt_cost, summarize
+from aeh.report import TaskReportRow, render_html, render_terminal, render_totals
 from aeh.scoring.assertions import evaluate_assertions
-from aeh.scoring.judge import JudgeBackend, OfflineRubricJudge
+from aeh.scoring.judge import DEFAULT_PROMPT_VERSION, PROMPT_VERSIONS, JudgeBackend, OfflineRubricJudge
 from aeh.suite import load_suite
-
-_GEMINI_PRICE_PER_MTOK: dict[str, tuple[float, float]] = {
-    "gemini-2.5-flash-lite": (0.10, 0.40),
-    "gemini-2.5-flash": (0.30, 2.50),
-}
 
 _BACKEND_OPTION = click.option(
     "--backend",
@@ -42,6 +38,19 @@ _TEMPERATURE_OPTION = click.option(
 )
 
 
+def _cost_latency_line(results: dict[str, Any]) -> str:
+    """One-line tokens/dollars/latency summary of a results.json."""
+    cl = results["cost_latency"]
+    solved = results["solved_seed_runs"]
+    per_solved = results["cost_per_solved_usd"]
+    per_solved_str = f"{fmt_cost(per_solved)}/solved task" if per_solved is not None else "no cost per solved task"
+    return (
+        f"tokens: in={cl['tokens_in']} out={cl['tokens_out']}  cost={fmt_cost(cl['cost_usd'])}  "
+        f"wall clock p50={cl['p50_s']:.2f}s p95={cl['p95_s']:.2f}s  "
+        f"solved {solved}/{results['total_seed_runs']}  {per_solved_str}"
+    )
+
+
 def _cassette_path(cassette_dir: str, task_id: str, seed: int) -> str:
     return str(Path(cassette_dir) / f"{task_id}-seed{seed}.jsonl")
 
@@ -54,21 +63,6 @@ def _make_backend(backend_name: str, model: str, temperature: float) -> ModelBac
     return GeminiBackend(model=model, temperature=temperature)
 
 
-def _token_totals(events: list[Any]) -> tuple[int, int]:
-    tokens_in = tokens_out = 0
-    for event in events:
-        if event.type == "llm_result":
-            tokens_in += int(event.payload["response"].get("tokens_in", 0))
-            tokens_out += int(event.payload["response"].get("tokens_out", 0))
-    return tokens_in, tokens_out
-
-
-def _estimate_cost(model: str, tokens_in: int, tokens_out: int) -> float | None:
-    prices = _GEMINI_PRICE_PER_MTOK.get(model)
-    if prices is None:
-        return None
-    in_price, out_price = prices
-    return (tokens_in / 1_000_000) * in_price + (tokens_out / 1_000_000) * out_price
 
 
 @click.group()
@@ -105,13 +99,12 @@ def record(
         for s in seeds:
             result = run_task(task, s, mode="record", backend=backend)
             write_jsonl(_cassette_path(out_dir, task.id, s), result.events)
-            ti, to = _token_totals(result.events)
-            tokens_in_total += ti
-            tokens_out_total += to
+            tokens_in_total += result.tokens_in
+            tokens_out_total += result.tokens_out
             count += 1
     click.echo(f"recorded {count} cassette(s) to {out_dir} (backend={backend_name})")
     if backend_name != "fake":
-        cost = _estimate_cost(model, tokens_in_total, tokens_out_total)
+        cost = estimate_cost(model, tokens_in_total, tokens_out_total)
         cost_str = f", est. cost=${cost:.4f}" if cost is not None else ""
         click.echo(f"tokens: in={tokens_in_total} out={tokens_out_total}{cost_str}")
 
@@ -160,12 +153,17 @@ def replay(
 
 
 def _run_suite(
-    suite_path: str, cassette_dir: str, mode: str, backend: ModelBackend | None = None
+    suite_path: str,
+    cassette_dir: str,
+    mode: str,
+    backend: ModelBackend | None = None,
+    model: str = "",
+    priced: bool = False,
 ) -> dict[str, Any]:
     suite = load_suite(suite_path)
     Path(cassette_dir).mkdir(parents=True, exist_ok=True)
     tasks_out = []
-    tokens_in_total = tokens_out_total = 0
+    all_seed_rows: list[dict[str, Any]] = []
     for task in suite.tasks:
         seed_rows = []
         for seed in task.seeds:
@@ -175,9 +173,6 @@ def _run_suite(
                 write_jsonl(path, result.events)
             else:
                 result = run_task(task, seed, mode="replay", cassette_path=path, backend=backend)
-            ti, to = _token_totals(result.events)
-            tokens_in_total += ti
-            tokens_out_total += to
             assertion_results = evaluate_assertions(result.final_state, result.tool_sequence, task.assertions)
             passed = result.error is None and all(a.passed for a in assertion_results)
             seed_rows.append(
@@ -191,14 +186,34 @@ def _run_suite(
                     "tool_sequence": result.tool_sequence,
                     "final_state": result.final_state,
                     "assertions": [{"type": a.spec_type, "passed": a.passed, "message": a.message} for a in assertion_results],
+                    "tokens_in": result.tokens_in,
+                    "tokens_out": result.tokens_out,
+                    "wall_clock_s": result.wall_clock_s,
                 }
             )
-        tasks_out.append({"task_id": task.id, "tags": task.tags, "rubric": task.rubric, "seeds": seed_rows})
+        all_seed_rows.extend(seed_rows)
+        tasks_out.append(
+            {
+                "task_id": task.id,
+                "tags": task.tags,
+                "rubric": task.rubric,
+                "seeds": seed_rows,
+                "cost_latency": summarize(seed_rows, model, priced=priced).to_dict(),
+            }
+        )
+    suite_cl = summarize(all_seed_rows, model, priced=priced)
+    solved = sum(1 for r in all_seed_rows if r["passed"])
     return {
         "suite_name": suite.name,
+        "model": model,
+        "priced": priced,
         "tasks": tasks_out,
-        "tokens_in": tokens_in_total,
-        "tokens_out": tokens_out_total,
+        "tokens_in": suite_cl.tokens_in,
+        "tokens_out": suite_cl.tokens_out,
+        "cost_latency": suite_cl.to_dict(),
+        "solved_seed_runs": solved,
+        "total_seed_runs": len(all_seed_rows),
+        "cost_per_solved_usd": cost_per_solved(suite_cl.cost_usd, solved),
     }
 
 
@@ -221,15 +236,36 @@ def run(
 ) -> None:
     """Run every task/seed in a suite and write a results.json for report/baseline/gate."""
     backend = _make_backend(backend_name, model, temperature)
-    results = _run_suite(suite_path, cassette_dir, mode, backend=backend)
+    priced = backend_name != "fake"
+    results = _run_suite(
+        suite_path,
+        cassette_dir,
+        mode,
+        backend=backend,
+        model=model if priced else "fake-backend (offline, no model called)",
+        priced=priced,
+    )
+    results["backend"] = backend_name
     Path(out_path).write_text(json.dumps(results, indent=2, sort_keys=True), encoding="utf-8")
     n_tasks = len(results["tasks"])
-    n_seeds = sum(len(t["seeds"]) for t in results["tasks"])
-    click.echo(f"ran {n_tasks} tasks / {n_seeds} seed-runs ({mode} mode, backend={backend_name}) -> {out_path}")
-    if backend_name != "fake":
-        cost = _estimate_cost(model, results["tokens_in"], results["tokens_out"])
-        cost_str = f", est. cost=${cost:.4f}" if cost is not None else ""
-        click.echo(f"tokens: in={results['tokens_in']} out={results['tokens_out']}{cost_str}")
+    click.echo(
+        f"ran {n_tasks} tasks / {results['total_seed_runs']} seed-runs "
+        f"({mode} mode, backend={backend_name}) -> {out_path}"
+    )
+    click.echo(_cost_latency_line(results))
+
+
+def _totals(results: dict[str, Any]) -> dict[str, Any] | None:
+    """The suite-level cost/latency block, for results.json files that carry one."""
+    if "cost_latency" not in results:
+        return None
+    return {
+        "model": results.get("model"),
+        "cost_latency": results["cost_latency"],
+        "solved_seed_runs": results["solved_seed_runs"],
+        "total_seed_runs": results["total_seed_runs"],
+        "cost_per_solved_usd": results.get("cost_per_solved_usd"),
+    }
 
 
 def _flakiness_from_results(results: dict[str, Any]) -> list:
@@ -250,11 +286,28 @@ def report(results_path: str, baseline_path: str | None, calibration_path: str |
     """Print a terminal report and optionally write a self-contained HTML report."""
     results = json.loads(Path(results_path).read_text(encoding="utf-8"))
     reports = _flakiness_from_results(results)
-    tags_by_id = {t["task_id"]: t["tags"] for t in results["tasks"]}
-    rows = [
-        TaskReportRow(r.task_id, r.n, r.passes, r.pass_rate, r.flake_score, r.verdict, tags_by_id.get(r.task_id, []))
-        for r in reports
-    ]
+    by_id = {t["task_id"]: t for t in results["tasks"]}
+    rows = []
+    for r in reports:
+        task = by_id.get(r.task_id, {})
+        cl = task.get("cost_latency", {})
+        rows.append(
+            TaskReportRow(
+                r.task_id,
+                r.n,
+                r.passes,
+                r.pass_rate,
+                r.flake_score,
+                r.verdict,
+                task.get("tags", []),
+                tokens_in=cl.get("tokens_in", 0),
+                tokens_out=cl.get("tokens_out", 0),
+                cost_usd=cl.get("cost_usd"),
+                p50_s=cl.get("p50_s", 0.0),
+                p95_s=cl.get("p95_s", 0.0),
+            )
+        )
+    totals = _totals(results)
     diffs = None
     if baseline_path:
         baseline = load_baseline(baseline_path)
@@ -263,9 +316,11 @@ def report(results_path: str, baseline_path: str | None, calibration_path: str |
     if calibration_path:
         calibration = json.loads(Path(calibration_path).read_text(encoding="utf-8"))
 
-    click.echo(render_terminal(results["suite_name"], rows, diffs, calibration))
+    click.echo(render_terminal(results["suite_name"], rows, diffs, calibration, totals))
     if html_out:
-        Path(html_out).write_text(render_html(results["suite_name"], rows, diffs, calibration), encoding="utf-8")
+        Path(html_out).write_text(
+            render_html(results["suite_name"], rows, diffs, calibration, totals), encoding="utf-8"
+        )
         click.echo(f"\nwrote HTML report to {html_out}")
 
 
@@ -280,25 +335,42 @@ def report(results_path: str, baseline_path: str | None, calibration_path: str |
     help="'fake' (default): deterministic OfflineRubricJudge. 'gemini': real Vertex AI judge -- opt-in only.",
 )
 @_MODEL_OPTION
-def calibrate(data_path: str, out_path: str | None, backend_name: str, model: str) -> None:
+@click.option(
+    "--split",
+    type=click.Choice(["all", "tune", "holdout"]),
+    default="all",
+    help="'tune': the half the judge prompt was developed against. 'holdout': the reserved half (the headline number).",
+)
+@click.option(
+    "--prompt-version",
+    type=click.Choice(sorted(PROMPT_VERSIONS)),
+    default=DEFAULT_PROMPT_VERSION,
+    help="Judge prompt variant, for --backend gemini.",
+)
+def calibrate(
+    data_path: str, out_path: str | None, backend_name: str, model: str, split: str, prompt_version: str
+) -> None:
     """Measure judge-vs-human agreement on a labeled trajectory set."""
-    rows = load_calibration_set(data_path)
+    rows = load_calibration_set(data_path, split=split)
     judge: JudgeBackend
     if backend_name == "gemini":
         from aeh.scoring.judge import GeminiJudge
 
-        judge = GeminiJudge(model=model)
+        judge = GeminiJudge(model=model, prompt_version=prompt_version)
     else:
         judge = OfflineRubricJudge()
-    result = run_calibration(judge, rows)
-    click.echo(f"n={result.n}  raw_agreement={result.raw_agreement:.3f}  kappa={result.kappa:.3f}")
+    result = run_calibration(judge, rows, split=split)
+    click.echo(
+        f"split={split}  n={result.n}  raw_agreement={result.raw_agreement:.3f}  "
+        f"kappa={result.kappa:.3f}  95% CI [{result.kappa_ci_low:.3f}, {result.kappa_ci_high:.3f}]"
+    )
     click.echo(f"confusion matrix (rows=human, cols=judge): {json.dumps(result.confusion, sort_keys=True)}")
     if result.disagreements:
         click.echo(f"\n{len(result.disagreements)} disagreement(s):")
         for d in result.disagreements:
             click.echo(f"  {d['id']}: human={d['human_label']} judge={d['judge_label']} ({d['rationale']})")
     if backend_name == "gemini":
-        cost = _estimate_cost(model, judge.tokens_in, judge.tokens_out)  # type: ignore[union-attr]
+        cost = estimate_cost(model, judge.tokens_in, judge.tokens_out)  # type: ignore[union-attr]
         cost_str = f", est. cost=${cost:.4f}" if cost is not None else ""
         click.echo(f"tokens: in={judge.tokens_in} out={judge.tokens_out}{cost_str}")  # type: ignore[union-attr]
     if out_path:
@@ -337,6 +409,10 @@ def gate(baseline_path: str, results_path: str, z: float) -> None:
         c = f"{d.current_pass_rate:.2f}" if d.current_pass_rate is not None else "-"
         marker = "  <-- REGRESSION" if d.classification == "regressed" else ""
         click.echo(f"{d.task_id:<28} baseline={b:>5} current={c:>5}  margin={d.margin:.3f}  {d.classification}{marker}")
+    totals = _totals(results)
+    if totals:
+        click.echo("")
+        click.echo(render_totals(totals))
     if has_regression(diffs):
         click.echo("\nGATE FAILED: at least one task regressed beyond tolerance.")
         sys.exit(1)

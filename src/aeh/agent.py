@@ -8,6 +8,7 @@ from typing import Any
 from aeh.backends.base import ModelBackend
 from aeh.backends.fake import FakeModelBackend
 from aeh.cassette import CassetteReader, CassetteWriter, DivergenceError, OnDivergence
+from aeh.events import token_totals, wall_clock_seconds
 from aeh.suite import Task
 from aeh.workspace import TOOL_REGISTRY, TOOL_SPECS, Workspace
 
@@ -43,6 +44,9 @@ class RunResult:
     diverged: bool
     error: str | None = None
     events: list[Any] = field(default_factory=list)
+    tokens_in: int = 0
+    tokens_out: int = 0
+    wall_clock_s: float = 0.0
 
 
 def _apply_tool_result(ws: Workspace, tool_name: str, args: dict[str, Any], response: dict[str, Any]) -> None:
@@ -138,6 +142,8 @@ def run_task(
     else:
         events = journal.events + journal.rerecorded_events
 
+    tokens_in, tokens_out = token_totals(events)
+
     return RunResult(
         run_id=run_id,
         task_id=task.id,
@@ -149,4 +155,7 @@ def run_task(
         diverged=diverged,
         error=error,
         events=events,
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
+        wall_clock_s=wall_clock_seconds(events),
     )

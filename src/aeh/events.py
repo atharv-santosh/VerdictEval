@@ -91,6 +91,30 @@ def content_hash(obj: Any) -> str:
     return hashlib.sha256(canonical_json(obj).encode("utf-8")).hexdigest()
 
 
+def token_totals(events: list[TrajectoryEvent]) -> tuple[int, int]:
+    """Sum the input and output token counts reported by every LLM result in a trajectory."""
+    tokens_in = tokens_out = 0
+    for event in events:
+        if event.type == "llm_result":
+            response = event.payload.get("response", {})
+            tokens_in += int(response.get("tokens_in", 0) or 0)
+            tokens_out += int(response.get("tokens_out", 0) or 0)
+    return tokens_in, tokens_out
+
+
+def wall_clock_seconds(events: list[TrajectoryEvent]) -> float:
+    """Elapsed time spanned by a trajectory's own timestamps.
+
+    On a replayed cassette these are the timestamps recorded during the original
+    live run, so this reports the model's real latency rather than the cost of
+    reading the file back.
+    """
+    if len(events) < 2:
+        return 0.0
+    timestamps = [event.ts for event in events]
+    return max(timestamps) - min(timestamps)
+
+
 def write_jsonl(path: str, events: list[TrajectoryEvent]) -> None:
     """Write a full list of events to ``path`` as JSONL, overwriting it."""
     with open(path, "w", encoding="utf-8") as fh:
