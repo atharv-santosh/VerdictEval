@@ -332,3 +332,11 @@ def test_sse_stream_completes(client):
                 saw_end = True
                 break
         assert saw_end
+
+
+def test_fake_backend_run_is_labelled_as_not_a_real_model(client):
+    """Cost columns exist for fake-backend runs, so the summary has to say no model was called."""
+    run_id = client.post("/api/runs", json={"task_ids": ["fix_max_retries"], "seeds": [1], "backend": "fake"}).json()["run_id"]
+    summary = _wait_for_run(client, run_id)["summary"]
+    assert "fake-backend" in summary["model"]
+    assert summary["cost_estimate"] == 0.0

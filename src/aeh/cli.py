@@ -19,7 +19,7 @@ from aeh.cassette import OnDivergence
 from aeh.events import write_jsonl
 from aeh.flakiness import SeedOutcome, analyze
 from aeh.gate import diff_against_baseline, has_regression
-from aeh.metrics import cost_per_solved, estimate_cost, fmt_cost, summarize
+from aeh.metrics import FAKE_MODEL_LABEL, cost_per_solved, estimate_cost, fmt_cost, summarize
 from aeh.report import TaskReportRow, render_html, render_terminal, render_totals
 from aeh.scoring.assertions import evaluate_assertions
 from aeh.scoring.judge import DEFAULT_PROMPT_VERSION, PROMPT_VERSIONS, JudgeBackend, OfflineRubricJudge
@@ -242,7 +242,7 @@ def run(
         cassette_dir,
         mode,
         backend=backend,
-        model=model if priced else "fake-backend (offline, no model called)",
+        model=model if priced else FAKE_MODEL_LABEL,
         priced=priced,
     )
     results["backend"] = backend_name

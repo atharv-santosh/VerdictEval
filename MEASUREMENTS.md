@@ -27,12 +27,12 @@ aeh gate --baseline /tmp/baseline.json --results /tmp/results.json
 
 ```
 $ pytest -q
-..............................................s......................... [ 68%]
-.................................                                        [100%]
-104 passed, 1 skipped in 2.38s
+..............................................s......................... [ 67%]
+..................................                                       [100%]
+105 passed, 1 skipped in 2.42s
 ```
 
-104 tests pass with zero credentials present; 1 skips cleanly (the opt-in
+105 tests pass with zero credentials present; 1 skips cleanly (the opt-in
 live Gemini smoke test, `tests/test_gemini_backend.py::test_live_gemini_smoke_call`,
 which only runs when `GOOGLE_CLOUD_PROJECT` is set). `mypy src/aeh` reports
 "Success: no issues found in 22 source files". The same steps run in a

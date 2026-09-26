@@ -28,7 +28,7 @@ from aeh.calibrate import load_calibration_set
 from aeh.cassette import DivergenceError, OnDivergence
 from aeh.flakiness import SeedOutcome, TaskFlakinessReport, analyze
 from aeh.gate import diff_against_baseline
-from aeh.metrics import cost_per_solved, estimate_cost, summarize
+from aeh.metrics import FAKE_MODEL_LABEL, cost_per_solved, estimate_cost, summarize
 from aeh.scoring.assertions import ASSERTION_TYPES, evaluate_assertions
 from aeh.scoring.judge import DEFAULT_PROMPT_VERSION, PROMPT_VERSIONS, GeminiJudge, JudgeBackend, OfflineRubricJudge
 from aeh.suite import Suite, Task, load_suite
@@ -261,7 +261,7 @@ class RunJob:
             "suite_name": self.suite_name,
             "status": self.status,
             "backend": self.backend_name,
-            "model": self.model,
+            "model": self.model if self.priced else FAKE_MODEL_LABEL,
             "created_at": self.created_at,
             "finished_at": self.finished_at,
             "error": self.error,
