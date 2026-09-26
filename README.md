@@ -19,12 +19,44 @@ Scoring agent output usually means asking another model whether the task was
 done. That judge is itself an unvalidated component, and raw agreement with
 human labels flatters it badly.
 
-Measured against the same 23 labelled trajectories, a substring heuristic
-agrees 65% of the time but scores only 0.303 on Cohen's kappa, which is poor
-once chance agreement is removed. A real Gemini judge on the same rows reaches
-0.913. Both numbers come from running the code, and the labels were written by
-one person rather than collected from independent annotators, which is worth
-knowing before quoting the second number.
+The calibration set is 66 hand-labelled trajectories, split in half. The judge
+prompt is developed against the tune half and scored once on the holdout half,
+so the reported number is not measuring how well the prompt was fitted to the
+fixtures. On the holdout half, `gemini-2.5-flash-lite` reaches Cohen's kappa
+0.698 with a 95% bootstrap interval of [0.449, 0.921], against 0.163 for a
+substring heuristic on the same rows (2026-09-25).
+
+An earlier version of this repository reported 0.913 on 23 easier rows with a
+prompt that named the failure modes those rows contained. The honest number is
+lower and the interval is wide: 33 rows cannot pin kappa down much better than
+"probably good, possibly mediocre". Hand-written guidance bullets scored 0.758
+on the tune half against 0.818 for the plain prompt, so the tuning was rejected
+rather than shipped. All labels come from one person, which is agreement with
+one author's judgment, not inter-annotator agreement.
+
+## Asserting on intent, not on the path
+
+Running the demo suite against real Gemini broke 6 of 9 tasks that asserted an
+exact tool sequence, while the files those tasks produced were correct. The
+model reasoned its way to the same place by a different route. If your eval
+asserts on the path rather than the result, you will spend your time chasing
+failures that are not failures.
+
+So tool assertions now come in three strengths: `exact` pins the whole path,
+`subsequence` requires the named calls in order but tolerates exploration
+around them, and `required_tools` asks only that each named tool was used. The
+demo suite states what each task's prompt implies instead of replaying the fake
+backend's script. Against the same 45 recorded real-Gemini runs, that moves the
+pass rate from 5/45 seed runs to 26/45, and leaves the two genuinely broken
+tasks still failing.
+
+## Cost and latency
+
+Every report carries measured tokens, dollars and wall-clock p50/p95 per task
+and per suite, plus cost per solved task. A replayed cassette reports the
+latency recorded during the original live run, so the offline numbers are the
+real model's. The 45-run real-Gemini suite above cost $0.0041 in total, which
+is $0.000159 per solved task at p50 2.14s.
 
 ## Regression gate
 
@@ -46,13 +78,6 @@ trajectories and relabel calibration rows.
 The CLI covers the same ground: `aeh run`, `aeh report`, `aeh calibrate`,
 `aeh baseline save`, `aeh gate`.
 
-Everything works offline against a deterministic fake backend. For real models,
-run `gcloud auth application-default login` and set `GOOGLE_CLOUD_PROJECT`.
-
-## One finding worth repeating
-
-Running the demo suite against real Gemini broke 6 of 9 tasks that asserted an
-exact tool sequence, while the files those tasks produced were correct. The
-model reasoned its way to the same place by a different route. If your eval
-asserts on the path rather than the result, you will spend your time chasing
-failures that are not failures.
+Everything works offline against a deterministic fake backend, and fake-backend
+numbers are labelled as such wherever they appear. For real models, run
+`gcloud auth application-default login` and set `GOOGLE_CLOUD_PROJECT`.

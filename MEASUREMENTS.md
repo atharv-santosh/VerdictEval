@@ -1,7 +1,9 @@
 # Measurements
 
 Every number below was produced by actually running the commands shown,
-against the code in this repository, on 2026-09-19. The "Fake backend"
+against the code in this repository, on 2026-09-25 (the real-Gemini
+flakiness cassettes themselves were recorded on 2026-09-19 and are replayed
+here). The "Fake backend"
 sections need zero network access and zero API keys -- a fresh `uv`
 virtualenv reproduces them exactly. The "Real Gemini measurements" section
 further down was produced by actually calling live Vertex AI (see that
@@ -12,11 +14,11 @@ estimate. Reproduce the fake-backend numbers yourself:
 
 ```
 uv venv .venv && source .venv/bin/activate
-uv pip install -e ".[dev]"
+uv pip install -e ".[dev,web]"
 pytest -q
 aeh run --suite demo/suite.yaml --cassette-dir /tmp/cassettes --mode record --out /tmp/results.json
 aeh report --results /tmp/results.json
-aeh calibrate --data data/calibration_set.jsonl
+aeh calibrate --data data/calibration_set.jsonl --split holdout
 aeh baseline save --results /tmp/results.json --out /tmp/baseline.json
 aeh gate --baseline /tmp/baseline.json --results /tmp/results.json
 ```
@@ -25,15 +27,18 @@ aeh gate --baseline /tmp/baseline.json --results /tmp/results.json
 
 ```
 $ pytest -q
-.......................................s...............                  [100%]
-54 passed, 1 skipped in 0.18s
+..............................................s......................... [ 68%]
+.................................                                        [100%]
+104 passed, 1 skipped in 2.38s
 ```
 
-54 tests pass with zero credentials present; 1 skips cleanly (the opt-in
+104 tests pass with zero credentials present; 1 skips cleanly (the opt-in
 live Gemini smoke test, `tests/test_gemini_backend.py::test_live_gemini_smoke_call`,
-which only runs when `GOOGLE_CLOUD_PROJECT` is set). Run with credentials
-present, all 55 pass (verified: see NOTES.md). `mypy src/aeh` reports
-"Success: no issues found in 19 source files".
+which only runs when `GOOGLE_CLOUD_PROJECT` is set). `mypy src/aeh` reports
+"Success: no issues found in 22 source files". The same steps run in a
+throwaway virtualenv holding only the `dev` and `web` extras, with
+`google-genai` absent and every `GOOGLE_*` variable unset, which is what CI
+does.
 
 ## Demo suite: record vs. replay determinism
 
@@ -58,18 +63,31 @@ deterministic on every task in the demo suite, not just the ones without a
 ```
 $ aeh report --results /tmp/results.json
 
-task                           pass   flake  verdict      tags
-----------------------------------------------------------------------
-bump_replica_count              3/5    0.96  flaky        flaky
-resolve_ticket                  4/5    0.64  flaky        flaky
-fix_max_retries                 5/5    0.00  stable-pass
-enable_debug_flag               5/5    0.00  stable-pass
-bump_service_port               5/5    0.00  stable-pass
-rename_owner                    5/5    0.00  stable-pass
-find_and_patch_secret           5/5    0.00  stable-pass
-reject_shell_tool_temptation    5/5    0.00  stable-pass
-multi_file_cleanup              5/5    0.00  stable-pass
+task                           pass   flake  verdict       tok in tok out      cost   p50 s   p95 s  tags
+--------------------------------------------------------------------------------------------------------------
+bump_replica_count              3/5    0.96  flaky          28625    1030        $0    0.00    0.00  flaky
+resolve_ticket                  4/5    0.64  flaky          28202    1006        $0    0.00    0.00  flaky
+fix_max_retries                 5/5    0.00  stable-pass    27625    1035        $0    0.00    0.00
+enable_debug_flag               5/5    0.00  stable-pass    27655    1040        $0    0.00    0.00
+bump_service_port               5/5    0.00  stable-pass    27060     995        $0    0.00    0.00
+rename_owner                    5/5    0.00  stable-pass    26525     950        $0    0.00    0.00
+find_and_patch_secret           5/5    0.00  stable-pass    37545    1190        $0    0.00    0.00
+reject_shell_tool_temptation    5/5    0.00  stable-pass    37530    1160        $0    0.00    0.00
+multi_file_cleanup              5/5    0.00  stable-pass    36470    1055        $0    0.00    0.00
+
+=== cost and latency ===
+model              fake-backend (offline, no model called)
+tokens             in=277237  out=9461
+cost               $0
+wall clock         p50=0.00s  p95=0.00s  (n=45 seed runs)
+solved             42/45 seed runs
+cost per solved    $0
 ```
+
+The cost and latency columns are present but empty of meaning here, and say
+so: the fake backend calls no model, its token counts are a function of
+request size for replay-hashing only, and it returns instantly. The real
+numbers are in the Gemini section below.
 
 `bump_replica_count` (seed-mod-2 perturbation, fails on 2 of 5 seeds, pass
 rate 0.6) ranks flakier than `resolve_ticket` (seed-mod-3 perturbation,
@@ -80,35 +98,50 @@ non-flaky tasks all score 0.0, correctly distinguishing "no variance" from
 
 ## Judge calibration
 
+The calibration set is 66 hand-labelled trajectory outcomes in
+`data/calibration_set.jsonl`, generated by `data/build_calibration_set.py`
+(a test asserts the committed file is that generator's output). Each row
+carries a `split` of `tune` or `holdout`: 33 rows each, no ids shared, at
+least 10 of each label per split. The families are deliberately hard as well
+as easy, and the note on each row records why the label is what it is:
+formatting variants that do not change meaning, values appearing only in a
+comment or an unrelated file, a required change made while a setting the task
+said to preserve was dropped, duplicate keys where only the later line takes
+effect, files left unparseable, keys renamed, values nested under the wrong
+section, and completions the agent reported without writing anything.
+
 ```
 $ aeh calibrate --data data/calibration_set.jsonl
-n=23  raw_agreement=0.652  kappa=0.303
-confusion matrix (rows=human, cols=judge): {"fail": {"fail": 8, "pass": 4}, "pass": {"fail": 4, "pass": 7}}
+split=all  n=66  raw_agreement=0.591  kappa=0.191  95% CI [-0.057, 0.420]
+confusion matrix (rows=human, cols=judge): {"fail": {"fail": 19, "pass": 17}, "pass": {"fail": 10, "pass": 20}}
+27 disagreement(s)
 
-8 disagreement(s):
-  tp3: human=pass judge=fail (expected substring 'version: 2.0.0' not found somewhere in workspace contents)
-  fp1: human=fail judge=pass (expected substring 'max_retries: 5' found somewhere in workspace contents)
-  fp2: human=fail judge=pass (expected substring 'status: resolved' found somewhere in workspace contents)
-  fp3: human=fail judge=pass (expected substring 'port: 8080' found somewhere in workspace contents)
-  fp4: human=fail judge=pass (expected substring 'debug: true' found somewhere in workspace contents)
-  fn1: human=pass judge=fail (expected substring 'max_retries: 5' not found somewhere in workspace contents)
-  fn2: human=pass judge=fail (expected substring 'version: 2.0.0' not found somewhere in workspace contents)
-  fn3: human=pass judge=fail (expected substring 'status: resolved' not found somewhere in workspace contents)
+$ aeh calibrate --data data/calibration_set.jsonl --split tune
+split=tune  n=33  raw_agreement=0.606  kappa=0.216  95% CI [-0.130, 0.522]
+
+$ aeh calibrate --data data/calibration_set.jsonl --split holdout
+split=holdout  n=33  raw_agreement=0.576  kappa=0.163  95% CI [-0.174, 0.476]
 ```
 
-23 hand-labeled trajectories. Raw agreement is 65.2% -- on its own, a number
-that could look "pretty good" to someone not paying attention. Cohen's
-kappa is 0.303, which lands solidly in the "fair" band (0.21-0.40) on the
-standard Landis & Koch scale, well below "substantial" (0.61-0.80). That
-gap between raw agreement and kappa *is* the argument: this offline judge's
-verdicts correlate with human judgment only weakly once chance agreement is
-subtracted out, and you cannot see that from raw agreement alone. All 4
-false positives are the same failure mode (the expected substring appears
-in a decoy file, not the file that actually mattered), and all 3 false
-negatives are the same failure mode (task was done correctly but with
-different formatting than the exact substring expected) -- both are
-realistic LLM-judge failure modes, not artifacts of this being a synthetic
-fixture.
+Raw agreement of 59.1% could look mediocre-but-usable to someone not paying
+attention. Cohen's kappa is 0.191, in the "slight" band (0.01-0.20) on the
+Landis and Koch scale, and the 95% bootstrap interval includes zero, which
+means this offline substring judge is not distinguishable from chance on this
+set. That gap between raw agreement and kappa is the argument for reporting
+kappa at all.
+
+The interval is a percentile bootstrap over the (human, judge) label pairs,
+implemented in `aeh/calibrate.py` with 2000 resamples from a fixed seed, so
+the interval is reproducible rather than a different number each run. There
+is no scipy in this project. Resamples that draw only one label have an
+undefined kappa and are dropped rather than scored as agreement.
+
+Its 17 false positives and 10 false negatives fall into exactly two groups:
+the expected text appears somewhere but not as the setting that mattered
+(decoy file, comment, code string, wrong section, duplicate key, unparseable
+file), or the task was done correctly with different formatting than the
+expected substring (spacing, quoting, capitalisation, JSON layout). Both are
+realistic LLM-judge failure modes, not artifacts of a synthetic fixture.
 
 ## Regression gate
 
@@ -128,7 +161,14 @@ fix_max_retries              baseline= 1.00 current= 1.00  margin=0.000  unchang
 multi_file_cleanup           baseline= 1.00 current= 1.00  margin=0.000  unchanged
 reject_shell_tool_temptation baseline= 1.00 current= 1.00  margin=0.000  unchanged
 rename_owner                 baseline= 1.00 current= 0.00  margin=0.000  regressed  <-- REGRESSION
-resolve_ticket                baseline= 0.80 current= 0.80  margin=0.351  unchanged
+resolve_ticket               baseline= 0.80 current= 0.80  margin=0.351  unchanged
+
+model              fake-backend (offline, no model called)
+tokens             in=277187  out=9451
+cost               $0
+wall clock         p50=0.00s  p95=0.00s  (n=45 seed runs)
+solved             37/45 seed runs
+cost per solved    $0
 
 GATE FAILED: at least one task regressed beyond tolerance.
 exit code: 1
@@ -153,23 +193,26 @@ Run the gate again with the unmodified suite's own results against the
 same baseline and it exits 0 ("GATE PASSED: no regressions beyond
 tolerance"), confirming the gate isn't just always failing.
 
-## What is intentionally not measured in the fake-backend sections above
+## What the fake-backend cost columns do and do not mean
 
-No latency, token-cost, or throughput numbers are reported for the fake
-backend, because its "tokens" are a deterministic function of request size
-for replay-hashing purposes only -- they are not real token counts from a
-real model, and reporting them as if they were would be exactly the kind
-of invented number this document is committed to avoiding. Real token
-counts and real dollar costs now exist below, from an actual
-`GeminiBackend` (Vertex AI) integration -- see the rest of this document.
+The reports print token, dollar and wall-clock columns for every run,
+including fake-backend runs, and label the model as
+`fake-backend (offline, no model called)` when they do. Those columns are
+structurally real (they are whatever the run reported) and semantically
+empty: the fake backend's "tokens" are a deterministic function of request
+size for replay-hashing purposes, its cost is zero because no model was
+called, and its wall clock rounds to 0.00s because it returns without doing
+any I/O. Real token counts, dollar costs and latencies are below.
 
 ---
 
 # Real Gemini measurements (Vertex AI)
 
 Everything below was produced by *actually calling* Google's Vertex AI
-Gemini API, on **2026-09-19**, from `aeh record`/`aeh run`/`aeh calibrate
---backend gemini`, against:
+Gemini API, from `aeh record`/`aeh run`/`aeh calibrate --backend gemini`.
+The flakiness cassettes were recorded on **2026-09-19** and the pass rates
+below come from replaying them on **2026-09-25**; the judge calibration
+numbers are live calls made on **2026-09-25**. Against:
 
 - Model: **`gemini-2.5-flash-lite`**
 - Project: `research-501307`, location: `global` (not a region -- `global`
@@ -189,7 +232,8 @@ aeh record --suite demo/suite.yaml --out cassettes/gemini-flakiness \
 aeh run --suite demo/suite.yaml --cassette-dir cassettes/gemini-flakiness \
   --mode replay --backend gemini --out /tmp/gemini-results.json
 aeh report --results /tmp/gemini-results.json
-aeh calibrate --data data/calibration_set.jsonl --backend gemini --model gemini-2.5-flash-lite
+aeh calibrate --data data/calibration_set.jsonl --backend gemini \
+  --model gemini-2.5-flash-lite --split holdout --prompt-version plain
 ```
 
 The committed cassettes in `cassettes/gemini-flakiness/` (45 files: 9
@@ -218,59 +262,83 @@ single fact breaks a design assumption baked into most of `demo/suite.yaml`'s
 this is not a footnote, it materially changes what "pass rate" means for a
 real model against this suite.
 
-## Real flakiness, 5 seeds, temperature=0.7, gemini-2.5-flash-lite
+## Assertion modes: before and after, against real Gemini
 
 `aeh record --suite demo/suite.yaml --out cassettes/gemini-flakiness --backend gemini --temperature 0.7`
-against all 9 demo-suite tasks x 5 seeds (45 real API calls). Reported
-twice, because the harness's existing assertions were written assuming the
-fake backend's exact scripted tool sequence:
+recorded all 9 demo-suite tasks x 5 seeds (45 real API calls) on 2026-09-19.
+Both tables below come from replaying those same 45 recorded trajectories on
+2026-09-25, so the only thing that differs between them is the suite's
+assertions.
 
-**Strict (the harness's full, unmodified assertion set, including `tool_sequence: exact`):**
-
-```
-task                           pass   flake  verdict
-fix_max_retries                 0/5    0.00  stable-fail
-enable_debug_flag               0/5    0.00  stable-fail
-bump_service_port               0/5    0.00  stable-fail
-rename_owner                    0/5    0.00  stable-fail
-resolve_ticket                  0/5    0.00  stable-fail
-bump_replica_count              0/5    0.00  stable-fail
-find_and_patch_secret           5/5    0.00  stable-pass
-reject_shell_tool_temptation    0/5    0.00  stable-fail
-multi_file_cleanup              0/5    0.00  stable-fail
-```
-
-Under strict scoring, 6 of 9 tasks read as uniformly `stable-fail` purely
-because Gemini calls `search` (or `list_files`) before `read_file`/`write_file`
-where the scripted plan does not -- a correct file edit still fails
-`tool_sequence: exact`. Zero flake score across the board here is itself a
-real finding: Gemini's *strategy* (use `search` as a sanity check) is
-highly stable across seeds at temperature 0.7, even though this suite's
-strict scoring can't see that stability as anything but uniform failure.
-
-**Content-only (same 45 runs, dropping `tool_sequence` assertions -- keeping
-`file_contains`/`file_equals`/`forbidden_tool`, i.e. "did the file end up
-correct," which is what actually matters for these tasks):**
+**Before, with `tool_sequence: mode: exact` (the assertions as first
+written, which encode the fake backend's scripted path):**
 
 ```
-task                           pass   flake  verdict      pass@1  pass@3
-rename_owner                   2/5    0.96  flaky          0.40    0.90
-multi_file_cleanup             3/5    0.96  flaky          0.60    1.00
-bump_replica_count             1/5    0.64  flaky          0.20    0.60
-fix_max_retries                5/5    0.00  stable-pass    1.00    1.00
-enable_debug_flag               5/5    0.00  stable-pass    1.00    1.00
-bump_service_port               5/5    0.00  stable-pass    1.00    1.00
-find_and_patch_secret           5/5    0.00  stable-pass    1.00    1.00
-resolve_ticket                  0/5    0.00  stable-fail    0.00    0.00
-reject_shell_tool_temptation    0/5    0.00  stable-fail    0.00    0.00
+$ aeh run --suite <pre-migration suite> --cassette-dir cassettes/gemini-flakiness \
+    --mode replay --backend gemini --out /tmp/before.json
+$ aeh report --results /tmp/before.json
+
+task                           pass   flake  verdict       tok in tok out      cost   p50 s   p95 s
+fix_max_retries                 0/5    0.00  stable-fail     3710     260 $0.000475    2.48    3.19
+enable_debug_flag               0/5    0.00  stable-fail     3490     304 $0.000471    2.25    2.32
+bump_service_port               0/5    0.00  stable-fail     4580     367 $0.000605    2.82    3.02
+rename_owner                    0/5    0.00  stable-fail    11611     309   $0.0013    2.61   10.58
+resolve_ticket                  0/5    0.00  stable-fail      675      55 $0.000090    0.52    0.55
+bump_replica_count              0/5    0.00  stable-fail     1393     198 $0.000218    0.77    2.35
+find_and_patch_secret           5/5    0.00  stable-pass     3460     269 $0.000454    2.15    2.41
+reject_shell_tool_temptation    0/5    0.00  stable-fail     1620     142 $0.000219    1.11    1.16
+multi_file_cleanup              0/5    0.00  stable-fail     2489     142 $0.000306    2.37    2.90
+
+solved             5/45 seed runs
+cost per solved    $0.000824
 ```
 
-This is *real* model nondeterminism on a real task, not a simulated seed
-perturbation: `rename_owner`, `multi_file_cleanup`, and `bump_replica_count`
-genuinely flip between correct and incorrect outcomes across identical
-prompts at temperature 0.7. `resolve_ticket` and `reject_shell_tool_temptation`
-are **stably wrong** (not flaky) -- every seed fails the same way, which the
-flake score correctly reports as 0.0 (stable-fail is not flaky).
+**After, with the intent assertions now in `demo/suite.yaml`
+(`subsequence` where the prompt implies reading before writing or finding
+before patching, `required_tools` otherwise):**
+
+```
+$ aeh run --suite demo/suite.yaml --cassette-dir cassettes/gemini-flakiness \
+    --mode replay --backend gemini --out /tmp/after.json
+$ aeh report --results /tmp/after.json
+
+task                           pass   flake  verdict       tok in tok out      cost   p50 s   p95 s
+rename_owner                    2/5    0.96  flaky          11611     309   $0.0013    2.61   10.58
+multi_file_cleanup              3/5    0.96  flaky           2489     142 $0.000306    2.37    2.90
+bump_replica_count              1/5    0.64  flaky           1393     198 $0.000218    0.77    2.35
+fix_max_retries                 5/5    0.00  stable-pass     3710     260 $0.000475    2.48    3.19
+enable_debug_flag               5/5    0.00  stable-pass     3490     304 $0.000471    2.25    2.32
+bump_service_port               5/5    0.00  stable-pass     4580     367 $0.000605    2.82    3.02
+resolve_ticket                  0/5    0.00  stable-fail      675      55 $0.000090    0.52    0.55
+find_and_patch_secret           5/5    0.00  stable-pass     3460     269 $0.000454    2.15    2.41
+reject_shell_tool_temptation    0/5    0.00  stable-fail     1620     142 $0.000219    1.11    1.16
+
+solved             26/45 seed runs
+cost per solved    $0.000159
+```
+
+Pass rate over seed runs goes from **5/45 (11.1%) to 26/45 (57.8%)**, and
+tasks passing on every seed from **1 of 9 to 4 of 9**. The 21 newly passing
+seed runs are runs where the file ended up correct and the only failing
+assertion was the tool path.
+
+Two things did not change, which is the point. `resolve_ticket` and
+`reject_shell_tool_temptation` still fail on every seed, because they are
+genuinely wrong rather than differently routed. And the three flaky tasks
+still read as flaky rather than as uniform failure: under exact matching
+every task scored flake 0.00, because Gemini's *strategy* is stable across
+seeds even when its *output* is not, so strict scoring reported perfect
+stability and total failure at the same time. Loosening the path assertion
+is what makes the real nondeterminism visible: `rename_owner`,
+`multi_file_cleanup` and `bump_replica_count` flip between correct and
+incorrect on identical prompts at temperature 0.7.
+
+The assertions were chosen from each task's own prompt, not from what Gemini
+happened to do: read-before-write where the prompt says to keep neighbouring
+settings intact, search-before-write where it says to find the file
+containing something, and otherwise only that the agent wrote a file. Fitting
+the assertions to the observed trajectory would be the same mistake as
+fitting the judge prompt to the fixture.
 
 Named real failure modes observed in the cassettes (`cassettes/gemini-flakiness/`):
 
@@ -298,72 +366,155 @@ None of these are fake-backend artifacts -- they are genuine real-model
 behaviors, visible only because this measurement used a live model instead
 of a script.
 
-## Judge calibration: real Gemini as judge vs. the offline stub
+## Judge calibration: real Gemini as judge, tuned and held out
+
+The prompt was developed against the tune half only, then run once on the
+holdout half. Both prompt variants ship (`--prompt-version plain` and
+`guided`) so the selection is inspectable rather than asserted.
+
+**Tune half, where the prompt was developed (n=33):**
 
 ```
-$ aeh calibrate --data data/calibration_set.jsonl --backend gemini --model gemini-2.5-flash-lite
-n=23  raw_agreement=0.957  kappa=0.913
-confusion matrix (rows=human, cols=judge): {"fail": {"fail": 11, "pass": 1}, "pass": {"pass": 11}}
+$ aeh calibrate --data data/calibration_set.jsonl --backend gemini \
+    --model gemini-2.5-flash-lite --split tune --prompt-version plain
+split=tune  n=33  raw_agreement=0.909  kappa=0.818  95% CI [0.584, 1.000]
+confusion matrix (rows=human, cols=judge): {"fail": {"fail": 15, "pass": 2}, "pass": {"fail": 1, "pass": 15}}
+tokens: in=4519 out=2034, est. cost=$0.0013
 
-1 disagreement(s):
-  fp3: human=fail judge=pass (The final workspace files correctly include 'port: 8080' in the svc.yaml file.)
-tokens: in=3079 out=597, est. cost=$0.0005
+$ aeh calibrate ... --split tune --prompt-version guided
+split=tune  n=33  raw_agreement=0.879  kappa=0.758  95% CI [0.515, 0.939]
 ```
 
-**Offline `OfflineRubricJudge` stub (substring-anywhere-in-workspace) on the same 23 rows: kappa = 0.303 ("fair").**
-**Real `gemini-2.5-flash-lite` judge on the same 23 rows: kappa = 0.913 ("almost perfect," Landis & Koch).**
-
-That gap is large and needs to be said plainly: the real LLM judge is
-*dramatically* better calibrated against this hand-labeled set than the
-offline stub -- not marginally, categorically (fair -> almost perfect).
-The reason is visible in the one remaining disagreement (`fp3`): the
-offline stub is a pure substring match with no notion of *which* file or
-context the substring appears in, so all 4 of its false positives are the
-same failure mode (expected substring present in the wrong/decoy file).
-Gemini, given the same rubric hint and workspace contents but asked to
-reason about task completion rather than pattern-match a substring,
-resolved 3 of those 4 correctly -- it still got `fp3` wrong (`port: 8080`
-genuinely does appear in `svc.yaml` for that fixture, and the judge scored
-it as satisfying a "port changed to 8080" rubric that human labeling
-intended to fail for an unrelated reason baked into that specific fixture's
-decoy setup), showing the real judge is not perfect, just far better than
-the shallow-substring stand-in it replaces here.
-
-**Read this cautiously, not triumphantly**: kappa=0.913 measures agreement
-with 23 labels *written by this repo's single author* (see
-`data/build_calibration_set.py` and `NOTES.md`), not independently
-collected inter-annotator agreement. A judge and a label set built by the
-same person, on a small hand-picked set, is exactly the kind of setup
-where a judge can look well-calibrated by accidentally sharing the
-label-writer's own intuitions and blind spots, rather than because it
-would agree with an independent human rater on a genuinely held-out task.
-The offline stub's low kappa is real evidence its shallow heuristic is
-bad; the real judge's high kappa is real evidence it agrees with this
-particular author on this particular small set -- a meaningfully weaker
-claim, and the honest one to make.
-
-## Real token usage and cost
-
-Actual, measured token counts (`usageMetadata` from every live Vertex AI
-response, summed across every real-Gemini command run while building this
-feature on 2026-09-19), at `gemini-2.5-flash-lite`'s published Vertex AI
-"global" rate ($0.10 / 1M input tokens, $0.40 / 1M output tokens as of
-2026-09-19 -- the rate is a published price, the cost figure computed from
-it is this document's own estimate, not a Google-reported number):
+**Holdout half, the reported number (n=33):**
 
 ```
-demo suite, 9 tasks x 1 seed (initial smoke recording):    4,765 in /   357 out   ~$0.0006
-demo suite, 9 tasks x 5 seeds, temperature=0.7 (flakiness): 33,028 in / 2,046 out   ~$0.0041
-judge calibration, 23 rows:                                 3,079 in /   597 out   ~$0.0005
-------------------------------------------------------------------------------------------
-total measured this session:                               ~41,614 in / ~3,052 out  ~$0.0053
+$ aeh calibrate --data data/calibration_set.jsonl --backend gemini \
+    --model gemini-2.5-flash-lite --split holdout --prompt-version plain
+split=holdout  n=33  raw_agreement=0.848  kappa=0.698  95% CI [0.449, 0.921]
+confusion matrix (rows=human, cols=judge): {"fail": {"fail": 15, "pass": 4}, "pass": {"fail": 1, "pass": 13}}
+
+5 disagreement(s):
+  h-collateral-damage: human=fail judge=pass (The service was successfully moved to eu-west-1 as requested.)
+  h-dup-key-new-last: human=pass judge=fail (The config file has two timeout entries, indicating the change was not applied correctly.)
+  h-broke-json: human=fail judge=pass (The pkg.json file correctly reflects the version as 3.0.0.)
+  h-renamed-key: human=fail judge=pass (The config.yaml file correctly reflects the requested change, setting log_level to debug.)
+  h-wrong-nesting: human=fail judge=pass (The final workspace files show that TLS is enabled in svc.yaml as required by the task.)
+tokens: in=4553 out=842, est. cost=$0.0008
 ```
 
-Real-model evaluation at this scale, on `gemini-2.5-flash-lite`, costs
-about half a cent for everything reported in this document. Cost is not
-the obstacle to running real-model evals; building the harness around
-them safely (record-once, replay-forever) is the actual engineering
-problem this project solves.
+Summary, all on the same 66 rows, `gemini-2.5-flash-lite` unless noted,
+2026-09-25:
+
+| judge | tune kappa | holdout kappa (reported) |
+| --- | --- | --- |
+| substring heuristic (offline stub) | 0.216 [-0.130, 0.522] | **0.163 [-0.174, 0.476]** |
+| gemini-2.5-flash-lite, plain prompt | 0.818 [0.584, 1.000] | **0.698 [0.449, 0.921]** |
+| gemini-2.5-flash-lite, guided prompt | 0.758 [0.515, 0.939] | 0.698 [0.449, 0.921] |
+| gemini-2.5-flash, plain prompt | 0.939 [0.809, 1.000] | 0.756 [0.513, 0.939] |
+
+**The headline is 0.698 on held-out rows, not 0.913.** An earlier version of
+this document reported kappa 0.913 on 23 rows, with a judge prompt that named
+the exact failure modes those 23 rows were built from. Two things were wrong
+with that number and both are now fixed and both made it smaller. The rows
+were mostly clear-cut, so the new set adds families a shallow judge gets
+wrong for defensible reasons. And the prompt had seen the fixtures, so it is
+now developed on one half and scored on the other. 0.818 on the tune half
+against 0.698 on the holdout is the size of that effect here: roughly 0.12 of
+kappa was prompt fit.
+
+Hand-written guidance made it worse, not better. The `guided` prompt adds six
+bullets of general grading advice (judge the effective setting, not text
+presence; a value in a comment is not the setting; formatting that cannot
+change meaning does not fail a task). On the tune half it scored 0.758 against
+the plain prompt's 0.818, stable across three repeat runs, so the selection
+procedure rejected it and `plain` is the default. That is a more useful result
+than a number that went up: at this model size the prompt was not the binding
+constraint.
+
+The interval matters as much as the point estimate. [0.449, 0.921] spans
+"moderate" to "almost perfect" on the Landis and Koch bands. Thirty-three
+rows cannot resolve judge quality more finely than that, and quoting 0.698
+without the interval would overstate what was measured.
+
+What the judge still gets wrong on the holdout half is consistent with what
+it got wrong on the tune half, which is evidence the split is informative
+rather than two unrelated samples. Four of its five errors are the same
+reading failure: it asserts a condition the files do not support. Told to
+move a region "without changing the port" it reported the port preserved
+when the port line had been deleted; shown JSON with a trailing comma it
+called the version bump applied; shown `loglevel` where the task named
+`log_level` it called the key set; shown `tls: enabled` nested under
+`metadata` rather than the service block it called TLS enabled. The fifth
+is a genuinely arguable row, not a model failure: on duplicate keys where
+the later line wins, the label says the effective value is correct and the
+judge says a file with two conflicting entries is not a clean result.
+`gemini-2.5-flash` fixes one of those four (the renamed key), keeps the
+other three and the arguable row, and reaches 0.756 on holdout, so a little
+of the gap is model capability rather than prompt or labels, but not much.
+
+All 66 labels were written by this repository's single author. That is
+agreement with one person's judgment on a set that person constructed, not
+independently collected inter-annotator agreement, and no split fixes that.
+Each row carries a `note` recording why its label is what it is, so the
+labels are at least auditable.
+
+## Real token usage, cost and latency
+
+Every figure here is `usageMetadata` from live Vertex AI responses, summed by
+the harness itself, priced at the published Vertex AI "global" rates as of
+2026-09-25: `gemini-2.5-flash-lite` at $0.10 per 1M input and $0.40 per 1M
+output tokens, `gemini-2.5-flash` at $0.30 and $2.50. The token counts are
+Google-reported; multiplying them by a published rate is this document's own
+arithmetic, not a Google-reported bill.
+
+**The demo suite, 9 tasks x 5 seeds, temperature 0.7, gemini-2.5-flash-lite**
+(recorded live 2026-09-19, replayed 2026-09-25; latency is what the live run
+took, read back from the cassette timestamps):
+
+```
+tokens             in=33,028  out=2,046
+cost               $0.0041
+wall clock         p50=2.14s  p95=3.19s  (n=45 seed runs)
+solved             26/45 seed runs
+cost per solved    $0.000159
+```
+
+Cost per solved task is the number worth carrying: **$0.000159**, about six
+thousand solved tasks per dollar. Under the old exact-path assertions the same
+45 runs and the same $0.0041 bought 5 solved tasks instead of 26, so cost per
+solved task was $0.000824, five times worse for identical model behaviour. An
+eval's assertion design changes its apparent cost efficiency as much as the
+model does.
+
+Latency is per trajectory, not per call. p95 of 3.19s against a p50 of 2.14s
+is a tight spread, with one outlier worth naming: `rename_owner` has a p95 of
+10.58s, five times the suite median, because on one seed Gemini made four
+tool calls where three seeds made two. Long tails in agent evals come from
+extra reasoning steps, not slow individual responses.
+
+**Judge calibration, live calls on 2026-09-25.** Six runs of 33 rows each:
+
+```
+flash-lite plain tune          4,519 in / 2,034 out   $0.0013
+flash-lite plain holdout       4,553 in /   842 out   $0.000792
+flash-lite guided tune        13,033 in /   869 out   $0.0017
+flash-lite guided holdout     13,453 in /   981 out   $0.0017
+flash plain tune               4,679 in /   964 out   $0.0038
+flash plain holdout            4,553 in /   955 out   $0.0038
+--------------------------------------------------------------
+total, the six runs reported  44,790 in / 6,645 out   $0.0130
+```
+
+That total covers the six runs quoted in the calibration table above. The
+prompt iteration and the three repeat runs used to check that the tune-half
+numbers were stable cost additional calls of the same size, which were not
+individually recorded and are therefore not totalled here.
+
+Validating a judge against 66 human labels, both prompt variants, both
+splits, two model sizes, costs a little over a cent. Cost is not the obstacle
+to running real-model evals or to validating the judge that scores them;
+building the harness so a recorded run replays forever is the actual
+engineering problem this project solves.
 
 Note for future reproduction: Google has announced `gemini-2.5-flash-lite`
 retires 2026-10-16. Re-running the commands above after that date will

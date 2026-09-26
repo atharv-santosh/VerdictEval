@@ -79,23 +79,33 @@ before you trust it. Concretely:
   real LLM judge's most common failure mode: pattern-matching surface
   content instead of verifying task semantics. Running `aeh calibrate`
   against `data/calibration_set.jsonl` measures exactly this gap -- see
-  `MEASUREMENTS.md` for the real kappa this produces. A kappa in the
-  "fair" range (0.2-0.4) on that set is the whole argument in one number:
-  this judge's raw pass/fail label is not, by itself, evidence that a task
-  succeeded. It is evidence only once you know how it correlates with
-  human judgment, and by how much.
+  `MEASUREMENTS.md` for the real kappa this produces. A kappa whose interval
+  includes zero, which is what that shallow judge scores, is the whole
+  argument in one number: its raw pass/fail label is not, by itself,
+  evidence that a task succeeded.
+- A point estimate of kappa on a few dozen rows is not a measurement either.
+  `aeh.calibrate.bootstrap_kappa_ci` resamples the label pairs (2000 draws,
+  fixed seed, also no scipy) and reports a percentile interval, because
+  the interval is usually wide enough to change what the number licenses
+  you to claim.
+- A judge prompt developed against the same fixtures it is scored on is
+  measuring its own fit. `data/calibration_set.jsonl` therefore carries a
+  `split` field, the prompt is developed against the `tune` half, and only
+  the `holdout` half is reported.
 
-Running the same 23 rows through a real `GeminiJudge` instead measures
-kappa = 0.913 -- "almost perfect," not "fair" -- which converts this from a
-demonstrated mechanism into an actual measured result about a real model.
-See `MEASUREMENTS.md` for the confusion matrix and the one remaining
-disagreement, and a caveat that has to travel with that number every time
-it's quoted: these 23 labels were hand-authored by this repo's single
-author (`data/build_calibration_set.py`), not independently collected from
-multiple annotators, so a real judge scoring well against them is evidence
-it agrees with *that author's* intuitions on *that specific set* -- weaker
-than, and not a substitute for, agreement measured against genuinely
-independent human labels.
+Running the `holdout` half through a real `GeminiJudge` measures kappa 0.698
+with a 95% interval of [0.449, 0.921], against 0.818 on the `tune` half the
+prompt was developed against. Both numbers are real; the smaller one is the
+one that generalises, and the gap between them is the size of the prompt-fit
+effect. See `MEASUREMENTS.md` for the confusion matrices, the per-row
+disagreements, and a caveat that travels with these numbers every time they
+are quoted: all 66 labels were hand-authored by this repo's single author
+(`data/build_calibration_set.py`), not independently collected from multiple
+annotators, so a judge scoring well against them is evidence it agrees with
+*that author's* intuitions -- weaker than, and not a substitute for,
+agreement measured against genuinely independent human labels. A tune and
+holdout split fixes prompt overfitting; it does not fix single-annotator
+labels.
 
 ## Why the demo agent is a scripted plan executor by default, and what changes with a real backend
 

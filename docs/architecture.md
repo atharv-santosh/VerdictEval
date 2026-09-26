@@ -39,7 +39,7 @@ flowchart TD
 
     RES --> REPORT[aeh.report: terminal + self-contained HTML]
 
-    CAL[data/calibration_set.jsonl] --> CALIB[aeh.calibrate: kappa, confusion matrix]
+    CAL[data/calibration_set.jsonl] --> CALIB[aeh.calibrate: kappa + bootstrap CI, tune/holdout]
     J -.same judge.-> CALIB
 ```
 
@@ -54,9 +54,10 @@ flowchart TD
 | `aeh.workspace` | In-memory virtual filesystem + the demo agent's four tools + their JSON-schema `TOOL_SPECS` |
 | `aeh.suite` | YAML task suite loader |
 | `aeh.agent` | The run loop: ties backend + tools + journal together for one task/seed |
-| `aeh.scoring.assertions` | Programmatic final-state / tool-sequence / forbidden-action checks |
-| `aeh.scoring.judge` | Judge protocol + `OfflineRubricJudge` |
-| `aeh.calibrate` | Judge-vs-human agreement: raw agreement, Cohen's kappa, confusion matrix |
+| `aeh.scoring.assertions` | Programmatic checks: final state, tool path (`exact`, `subsequence`, `set`, `required_tools`), forbidden actions |
+| `aeh.scoring.judge` | Judge protocol, `OfflineRubricJudge`, `GeminiJudge` with selectable prompt versions |
+| `aeh.calibrate` | Judge-vs-human agreement: raw agreement, Cohen's kappa, bootstrap interval, confusion matrix, tune/holdout splits |
+| `aeh.metrics` | Token and dollar pricing, percentiles, per-task and per-suite cost/latency rollups |
 | `aeh.flakiness` | pass@k, variance, flake score, ranked by flakiness |
 | `aeh.baseline` | Save/load a "known good" result snapshot |
 | `aeh.gate` | Diff a run against a baseline with per-task noise tolerance; exit code for CI |

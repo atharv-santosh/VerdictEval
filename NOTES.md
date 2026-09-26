@@ -207,3 +207,117 @@ done correctly but with different formatting than the exact string
 expected) alongside plain true positives/negatives, so the resulting kappa
 (0.303, "fair" agreement) reflects a real, nameable judge weakness rather
 than an arbitrary number.
+
+## Revisiting kappa=0.913: most of it was the prompt reading the fixtures
+
+The 0.913 above was measured with a judge prompt that ended "a substring
+appearing in the wrong file, or in a decoy/comment, is not a pass" against a
+23-row set whose only hard rows were substrings in wrong files and decoy
+comments. I had written the answer key into the prompt. The number was real
+and the measurement was circular.
+
+Fixing it took two changes. The set went to 66 rows with families a shallow
+judge gets wrong for defensible reasons: formatting variants that do not
+change meaning, values lost from a setting the task said to preserve,
+duplicate keys where only the later line takes effect, files left
+unparseable, keys renamed, values nested under the wrong section. And it
+carries a `split` field, so the prompt is developed on 33 rows and scored
+once on the other 33.
+
+Held out, `gemini-2.5-flash-lite` scores 0.698 [0.449, 0.921] against 0.818
+on the tune half. Roughly 0.12 of kappa was prompt fit, and the rest of the
+drop from 0.913 was the old set being easy.
+
+The bootstrap interval changed how I read the result more than the point
+estimate did. [0.449, 0.921] spans "moderate" to "almost perfect": 33 rows
+simply cannot resolve judge quality more finely than that. Quoting 0.698 on
+its own would repeat the original mistake in a quieter way.
+
+## The tuned judge prompt lost to the plain one, which is the more useful result
+
+I wrote six bullets of general grading guidance for the judge: grade the
+effective setting rather than text presence, a value in a comment is not the
+setting, formatting that cannot change meaning does not fail a task. On the
+tune half it scored 0.758 against the plain prompt's 0.818, stable across
+three repeat runs at temperature 0.
+
+I nearly shipped it anyway, because it reads like better instructions. The
+split is what stopped me: selection happens on the tune half, the tune half
+said no, so `plain` is the default and `guided` stays in the repo as the
+rejected variant. Four of the five remaining holdout errors are the judge
+asserting a condition the files do not support, for example reporting a port
+preserved when the port line had been deleted. That is a reading failure, not
+a missing instruction, which is why more instructions did not help.
+
+## One judge call in sixty comes back MALFORMED_FUNCTION_CALL
+
+Forcing `mode="ANY"` guarantees the model tries to call the verdict function.
+It does not guarantee the call parses. On `t-emptied-wrong-file` Vertex
+returned `finish_reason=MALFORMED_FUNCTION_CALL` with `content.parts` set to
+`None`, and the old `parts[0].function_call` crashed the whole calibration
+run at row 26 of 33.
+
+The judge now retries the same prompt as plain text, asking for PASS or FAIL
+as the first word, and counts the fallback in `malformed_calls`. Scoring the
+row as "fail" instead would have been the cheaper fix and would have quietly
+biased kappa.
+
+Empty files were a related problem. `--- keep.txt ---` followed by nothing
+looks identical to a file that was not listed, so the judge kept reporting
+`keep.txt` untouched when it had been truncated. Files are now rendered with
+byte counts and an explicit "this file exists and is completely empty", which
+is a representation fix rather than a prompt fix and helps both variants.
+
+## Loosening the tool assertions moved the real-Gemini pass rate 5/45 to 26/45
+
+The finding above said exact tool-sequence assertions break on real models.
+Acting on it: `subsequence` where each task's own prompt implies reading
+before writing, `required_tools` where only the write matters. Replaying the
+same 45 recorded trajectories, pass rate went from 5/45 to 26/45 and tasks
+passing on every seed from 1 to 4.
+
+The tempting mistake was choosing the new assertions by looking at what
+Gemini did, which would have been the same overfitting sin as the judge
+prompt. I took them from each task's prompt text instead, and the check that
+it worked is that `resolve_ticket` and `reject_shell_tool_temptation` still
+fail on every seed. They are wrong, not differently routed.
+
+One thing surprised me. Under exact matching every task scored flake 0.00,
+which reads as perfect stability, while every one of them failed. Gemini's
+strategy is stable across seeds even when its output is not, so strict
+scoring reported total stability and total failure simultaneously. The three
+genuinely flaky tasks only became visible once the path assertion stopped
+dominating the verdict.
+
+## Cost per solved task depends on the assertions, not just the model
+
+Adding tokens, dollars and wall-clock percentiles to the reports produced one
+number I did not expect to be interesting. The same 45 real-Gemini runs cost
+$0.0041 either way, but under exact assertions that bought 5 solved tasks and
+under intent assertions it bought 26, so cost per solved task went from
+$0.000824 to $0.000159. Five times better cost efficiency, identical model
+behaviour, purely from how the eval was written.
+
+Latency needed a decision. Timing a replay measures how fast Python parses
+JSONL, which is useless. `wall_clock_seconds` reads the trajectory's own
+timestamps instead, so a replayed cassette reports what the live run actually
+took, and the offline reports carry real latency. p95 3.19s against p50 2.14s
+across the suite, with `rename_owner` at 10.58s because one seed took four
+tool calls where others took two. Agent tail latency is extra steps, not slow
+responses.
+
+## An unknown field in a web request body was silently changing which backend ran
+
+Every route took `body: dict[str, Any]` and read it with `.get`. Posting
+`{"backend": "fake", "backedn": "gemini"}` to `/api/runs` returned 200 and ran
+the fake backend, and the results grid then reported a pass rate for a run
+nobody had asked for. The fake backend is the default precisely because it is
+the safe one, which is what made the failure quiet.
+
+Every body is now a Pydantic model inheriting `extra="forbid"`, so that
+request is a 422 naming the offending field. The same change caught that
+`temperature: "hot"` used to become `float("hot")` and a 500.
+
+While doing it I found the reason none of this had been caught: CI installed
+only the `dev` extra, so `pytest.importorskip("fastapi")` skipped all 29 web
+tests on every run. The workflow now installs `dev,web`.
