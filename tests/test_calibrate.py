@@ -71,3 +71,16 @@ def test_calibration_result_carries_an_interval():
     assert result.split == "holdout"
     assert result.kappa_ci_low <= result.kappa <= result.kappa_ci_high
     assert result.to_dict()["kappa_ci_high"] == result.kappa_ci_high
+
+
+def test_committed_set_matches_its_generator():
+    """The shipped JSONL is the generator's output, so a label edited in one place cannot drift from the other."""
+    import importlib.util
+    import json
+
+    spec = importlib.util.spec_from_file_location("build_calibration_set", "data/build_calibration_set.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    on_disk = [json.loads(line) for line in open("data/calibration_set.jsonl", encoding="utf-8") if line.strip()]
+    assert on_disk == module.ROWS

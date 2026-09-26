@@ -23,7 +23,7 @@ jobs:
         run: |
           uv venv .venv
           source .venv/bin/activate
-          uv pip install -e ".[dev]"
+          uv pip install -e ".[dev,web]"
 
       - name: Type check
         run: |
@@ -40,10 +40,10 @@ jobs:
           source .venv/bin/activate
           aeh run --suite demo/suite.yaml --cassette-dir /tmp/cassettes --mode record --out /tmp/results.json
 
-      - name: Calibrate the offline judge
+      - name: Calibrate the offline judge on the held-out split
         run: |
           source .venv/bin/activate
-          aeh calibrate --data data/calibration_set.jsonl --out /tmp/calibration.json
+          aeh calibrate --data data/calibration_set.jsonl --split holdout --out /tmp/calibration.json
 
       - name: Generate report
         run: |
