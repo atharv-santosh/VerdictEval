@@ -1,4 +1,4 @@
-# agent-eval-harness
+# Verdict Eval
 
 Testing for LLM agents, built around the fact that the same prompt does not give
 the same run twice.
